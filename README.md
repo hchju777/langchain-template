@@ -10,6 +10,7 @@
 |---|---|
 | [튜토리얼](docs/tutorial.md) | 새 분석을 처음부터 만들어보는 실습 |
 | [config 레퍼런스](docs/config-reference.md) | 모든 설정 항목의 의미·기본값·어느 계층에 둘지 |
+| [테스트](tests/README.md) | 실행 방법과 새 분석 테스트 작성법 |
 | [설계 문서](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md) | 왜 이렇게 설계했는지, 검토했다 버린 대안들 |
 
 ---
@@ -750,8 +751,7 @@ LLM_API_KEY=...
 
 | | 상태 | 비고 |
 |---|---|---|
-| **테스트 전체** | **하나도 없음** | `tests/` 디렉터리 자체가 없습니다. 설계 문서 §10은 노드·서브그래프·config·전체그래프 4개 층을 전제하지만 전부 미작성 |
-| 어댑터 테스트 | **의도적으로 없음** | 위와 별개로, 어댑터는 안 만들기로 결정했습니다 ([설계 문서 §11](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md)) |
+| 어댑터 테스트 | **의도적으로 없음** | 나머지 4개 층은 [tests/](tests/README.md)에 있습니다. 어댑터만 안 만들기로 한 이유는 [설계 문서 §11](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md) |
 | 체크포인터 | 미연결 | Time Travel·재개 미동작 |
 | 상주 스케줄러 | 미구현 | CLI만 있음. 설계상 `infrastructure/scheduler.py` |
 | `schedule` config | **읽는 코드 없음** | `config/gbm/mx.json`에 `cron`/`timezone` 블록이 있지만 현재 무시됩니다. 스케줄러를 붙일 때 사용 |
