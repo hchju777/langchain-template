@@ -44,7 +44,7 @@ class BaseAdapter:
         self.timeout = timeout
         self.max_retries = max_retries
         # 실제 구현 예시:
-        # self._client = AsyncIOMotorClient(dsn, serverSelectionTimeoutMS=...)
+        # self._client = AsyncMongoClient(uri, serverSelectionTimeoutMS=...)
 
     async def close(self) -> None:
         # 실제 구현 예시:

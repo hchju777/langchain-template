@@ -303,7 +303,7 @@ GBM/FCT마다 같은 지표가 다른 저장소에 있어도(`"metric": "rest"`)
 
 | 어댑터 | 라이브러리 | 비고 |
 |---|---|---|
-| mongo | motor | historical 조회의 주력 |
+| mongo | pymongo (AsyncMongoClient) | historical 조회의 주력. motor는 2026-05 deprecated |
 | redis | redis.asyncio | 스냅샷·캐시 |
 | kafka_admin | aiokafka | **메시지 소비 안 함** — 오프셋 메타데이터만 |
 | rest | httpx.AsyncClient | 타임아웃·재시도 필수 |

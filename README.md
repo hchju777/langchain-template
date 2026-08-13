@@ -17,13 +17,26 @@
 
 ## 빠른 시작
 
-### 가상환경 활성화
+### 설치
 
-| OS / 셸 | 명령 |
+```bash
+python -m venv .venv
+```
+
+| OS / 셸 | 활성화 |
 |---|---|
 | Linux / macOS | `source .venv/bin/activate` |
 | Windows PowerShell | `.venv\Scripts\Activate.ps1` |
 | Windows cmd | `.venv\Scripts\activate.bat` |
+
+```bash
+pip install -r requirements.txt                        # 실행용
+pip install -r requirements.txt -r requirements-dev.txt  # 개발·테스트 포함
+```
+
+> **Windows 주의 — `tzdata`**: `requirements.txt`에 포함돼 있습니다. `zoneinfo`가 시스템 tz 데이터베이스를 찾는데 Windows에는 없어서, 없으면 config의 `"timezone": "Asia/Seoul"`이 실패합니다.
+>
+> 모든 의존성은 **미리 빌드된 휠**로 설치되어 컴파일러가 필요 없습니다.
 
 > PowerShell에서 실행 정책 오류가 나면 그 세션에서만 풀어주면 됩니다:
 > `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
@@ -208,7 +221,7 @@ Hexagonal은 **방향축**(driving/driven), Clean은 **관심사축**(presentati
 | Entities | `domain/models.py` |
 | Use Cases | `application/` |
 | Interface Adapters | `presentation/` (controller·presenter) + `infrastructure/` (gateway) |
-| Frameworks & Drivers | `infrastructure/` 안의 motor·httpx·aiokafka 호출부 |
+| Frameworks & Drivers | `infrastructure/` 안의 pymongo·httpx·aiokafka 호출부 |
 
 `domain/ports.py`가 이 셋을 잇는 계약입니다. `MetricPort`는 `infrastructure`가, `ReportRendererPort`는 `presentation`이 구현하고, `application`은 어느 쪽도 import하지 않습니다.
 
@@ -776,5 +789,20 @@ LLM_API_KEY=...
 
 ## 요구 환경
 
-- Python 3.12
-- langgraph 1.2.x, langchain 1.3.x, pydantic 2.x, pydantic-settings 2.x
+- **Python 3.12** 이상 (3.10+에서 동작하지만 3.12로 개발·검증했습니다)
+- Windows / Linux / macOS — 전부 미리 빌드된 휠로 설치됩니다
+
+의존성은 [requirements.txt](requirements.txt)에 용도별로 정리돼 있습니다.
+
+| 묶음 | 언제 필요한가 |
+|---|---|
+| 코어 (langgraph, langchain, pydantic) | 항상 |
+| `jinja2` | 반복문·조건문이 있는 템플릿을 쓸 때. 지금은 표준 라이브러리로 렌더링 |
+| `APScheduler`, `tzdata` | 상주 스케줄러. **`tzdata`는 Windows 필수** |
+| `langchain-openai` | `llm.adapter`가 `"chat_model"`일 때 |
+| `redis`, `pymongo`, `aiokafka`, `httpx`, `aiosmtplib` | 실제 저장소·메일에 연결할 때 |
+| `langgraph-checkpoint-mongodb` | 재시작 후 재개가 필요할 때 (`checkpoint.backend: "mongodb"`) |
+
+> **MongoDB 드라이버**: `motor`가 아니라 **PyMongo의 `AsyncMongoClient`**를 씁니다. motor는 2026-05-14에 deprecated 되었습니다(중요 버그 수정만 2027-05까지).
+
+지금 상태로는 **코어만 있어도 전부 동작합니다** — DB·LLM이 스텁이고 테스트가 `unittest` 기반이라서요.

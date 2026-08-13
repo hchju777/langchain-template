@@ -80,7 +80,8 @@ class MongoAdapter(_PingMixin, BaseAdapter):
     supported_kinds = ("alarms",)
 
     # 실제 구현:
-    # self._client = AsyncIOMotorClient(dsn, password=...)
+    # self._client = AsyncMongoClient(uri, password=...)   # from pymongo
+    #   motor는 2026-05 deprecated. PyMongo의 AsyncMongoClient를 쓴다.
     # self._coll = self._client[db][collection]
 
     async def fetch(self, ctx: HistoricalContext, spec: FetchSpec) -> list[Record]:

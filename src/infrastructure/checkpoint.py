@@ -70,8 +70,8 @@ def build_checkpointer(
     if backend == BACKEND_MONGODB:
         # 실제 구현:
         #   from langgraph.checkpoint.mongodb import MongoDBSaver
-        #   from motor.motor_asyncio import AsyncIOMotorClient
-        #   client = AsyncIOMotorClient(env.mongodb_uri, password=env.mongodb_password)
+        #   from pymongo import AsyncMongoClient
+        #   client = AsyncMongoClient(env.mongodb_uri, password=env.mongodb_password)
         #   return MongoDBSaver(client, db_name=env.checkpoint_database,
         #                       serde=_serializer(extra_types))
         #

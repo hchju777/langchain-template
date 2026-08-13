@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -239,7 +240,25 @@ def _registry_list() -> int:
     return 0
 
 
+def _force_utf8_stdout() -> None:
+    """Windows 콘솔 기본 인코딩(cp949)에서 한글·이모지가 깨지는 걸 막는다.
+
+    리포트에 심각도 표시로 🔴🟡🟢를 쓰는데, cp949로는 인코딩할 수 없어
+    UnicodeEncodeError가 난다. 파일로 저장되는 md는 이미 utf-8이라 영향이
+    없고, 화면 출력만 문제다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                # 리다이렉트된 스트림 등 재설정할 수 없는 경우는 그냥 둔다
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdout()
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     args = _parser().parse_args(argv)
 
