@@ -131,6 +131,8 @@ src/
 ├── infrastructure/             ← 외부 세계와의 I/O
 │   ├── base.py                   BaseAdapter — 타임아웃·재시도·풀 수명
 │   ├── stores.py                 Redis/Mongo/Kafka/REST 어댑터
+│   ├── router.py                 kind → 어댑터 라우팅 (config의 ports)
+│   ├── checkpoint.py             재개·Time Travel의 저장 백엔드
 │   ├── fake_data.py              ★ 실제 구현에서는 통째로 사라짐
 │   ├── llm.py                    LLM 단일 경로 + 가드레일 + replay
 │   └── delivery.py               파일 쓰기 / SMTP 발송
@@ -138,7 +140,7 @@ src/
 ├── config/                     ← 설정을 "읽는 코드"
 │   ├── loader.py                 3단 deep merge + 출처 추적
 │   ├── env.py                    EnvConfig — 접속 정보·비밀값
-│   └── registry.py               자동 스캔 + @register + 부팅 3중 검증
+│   └── registry.py               자동 스캔 + @register + 부팅 검증
 │
 └── constants.py                  매직값 금지
 
@@ -691,8 +693,11 @@ LangGraph가 fan-out을 자동 병렬 실행하고, 취합 노드는 전부 끝�
 | 명령 | 설명 |
 |---|---|
 | `run --gbm --factory [--as-of] [--stream] [--quiet]` | 리포트 생성 |
+| `run ... --save-traces PATH` | LLM 프롬프트·응답을 JSON으로 저장 |
+| `run ... --replay PATH` | 저장된 응답을 재생 (LLM 고정) |
+| `run ... --show-checkpoints` | 실행 후 체크포인트 목록 |
 | `config show --gbm --factory` | 병합 결과 + 각 값의 출처 |
-| `registry` | 등록된 서브그래프 목록 |
+| `registry` | 등록된 서브그래프·노드 부품 목록 |
 
 `--gbm`/`--factory`를 생략하면 `.env`의 `DEPLOY_GBM`/`DEPLOY_FACTORY`를 씁니다.
 
@@ -732,14 +737,22 @@ LLM_API_KEY=...
 
 ### 체크포인터
 
-`src/application/graph/builder.py` 끝에 주석이 있습니다.
+**배선은 이미 되어 있습니다.** config에서 백엔드만 고릅니다.
+
+```json
+{ "checkpoint": { "backend": "memory" } }
+```
+
+지금은 `memory`만 동작합니다 — 이 환경에 `langgraph-checkpoint-mongodb`가 없어 설치할 수 없습니다. 프로세스 안에서 **Time Travel과 fork는 완전히 동작**하고, 재시작 후 재개만 불가능합니다.
+
+실제 백엔드로 바꾸려면 [checkpoint.py](src/infrastructure/checkpoint.py)의 주석 한 곳만 살리면 됩니다.
 
 ```python
 # from langgraph.checkpoint.mongodb import MongoDBSaver
-# return graph.compile(checkpointer=MongoDBSaver(client, db_name=...))
+# return MongoDBSaver(client, db_name=env.checkpoint_database, serde=_serializer(extra_types))
 ```
 
-이걸 붙이면 Durable Execution과 Time Travel이 따라옵니다(별도 구현 없음).
+그래프 조립도, 노드도, State도 그대로입니다 — 체크포인터는 `compile()`에 넘기는 인자일 뿐입니다.
 
 ### 렌더러
 
@@ -752,11 +765,10 @@ LLM_API_KEY=...
 | | 상태 | 비고 |
 |---|---|---|
 | 어댑터 테스트 | **의도적으로 없음** | 나머지 4개 층은 [tests/](tests/README.md)에 있습니다. 어댑터만 안 만들기로 한 이유는 [설계 문서 §11](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md) |
-| 체크포인터 | 미연결 | Time Travel·재개 미동작 |
+| 체크포인터 (영속) | memory만 동작 | Time Travel·fork는 프로세스 안에서 완전히 동작합니다. **재시작 후 재개**만 불가 — `langgraph-checkpoint-mongodb` 패키지가 이 환경에 없습니다 |
 | 상주 스케줄러 | 미구현 | CLI만 있음. 설계상 `infrastructure/scheduler.py` |
 | `schedule` config | **읽는 코드 없음** | `config/gbm/mx.json`에 `cron`/`timezone` 블록이 있지만 현재 무시됩니다. 스케줄러를 붙일 때 사용 |
 | 중복 실행 락 | 미구현 | Mongo `{gbm,factory,as_of}` 유니크 인덱스 예정 |
-| replay 모드 | 어댑터만 준비 | `--replay` 플래그 미연결 |
 
 `fake_data.py`는 `as_of`로 난수 시드를 고정하므로 **같은 `as_of`는 항상 같은 데이터**를 돌려줍니다. 실제 연결 전에도 멱등성을 확인할 수 있습니다.
 

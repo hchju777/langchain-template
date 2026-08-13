@@ -26,6 +26,7 @@ from src.config.registry import (
 from src.constants import (
     DEFAULT_REPORT_TEMPLATE,
     DEFAULT_TIMEOUT_SEC,
+    KEY_CHECKPOINT,
     KEY_DELIVERY,
     KEY_LLM,
     KEY_NODES,
@@ -39,6 +40,7 @@ from src.constants import (
     SLOT_PROCESS,
     SLOT_VALIDATE,
 )
+from src.infrastructure.checkpoint import build_checkpointer
 from src.infrastructure.delivery import FileDelivery, MailDelivery
 from src.infrastructure.llm import build_llm
 from src.infrastructure.router import DataRouter
@@ -51,7 +53,11 @@ from src.infrastructure.stores import (
 from src.presentation.renderers import MarkdownRenderer
 
 
-def build_dependencies(cfg: DeployConfig, env: EnvConfig | None = None) -> Dependencies:
+def build_dependencies(
+    cfg: DeployConfig,
+    env: EnvConfig | None = None,
+    replay: dict[str, str] | None = None,
+) -> Dependencies:
     """infrastructure와 presentation 어댑터를 만들어 포트에 바인딩한다.
 
     두 설정이 여기서 만난다:
@@ -101,10 +107,13 @@ def build_dependencies(cfg: DeployConfig, env: EnvConfig | None = None) -> Depen
     # adapter/model/temperature는 GBM/FCT별로 다를 수 있어 config JSON에서,
     # base_url/api_key는 환경별로 달라지므로 .env에서 온다.
     # 실제 LLM으로 바꾸려면 config에 "adapter": "chat_model" 한 줄이면 된다.
+    # replay가 있으면 저장된 응답을 재생한다 — LLM을 고정한 채 후속
+    # 로직만 고쳐가며 디버깅할 때 쓴다.
     llm = build_llm(
         cfg.section(KEY_LLM),
         base_url=env.llm_base_url,
         api_key=env.llm_api_key,
+        replay=replay,
     )
 
     deliveries = []
@@ -164,7 +173,11 @@ def _make_subgraph_node(name: str, compiled):
 
 
 def _deps_for(
-    deps: Dependencies, base_llm_cfg: dict, sub_cfg: dict, env: EnvConfig
+    deps: Dependencies,
+    base_llm_cfg: dict,
+    sub_cfg: dict,
+    env: EnvConfig,
+    replay: dict[str, str] | None = None,
 ) -> Dependencies:
     """서브그래프 전용 Dependencies. LLM만 갈아끼운다.
 
@@ -177,11 +190,21 @@ def _deps_for(
     merged = deep_merge(base_llm_cfg, override)
     return replace(
         deps,
-        llm=build_llm(merged, base_url=env.llm_base_url, api_key=env.llm_api_key),
+        llm=build_llm(
+            merged,
+            base_url=env.llm_base_url,
+            api_key=env.llm_api_key,
+            replay=replay,
+        ),
     )
 
 
-def build_graph(cfg: DeployConfig, deps: Dependencies, env: EnvConfig | None = None):
+def build_graph(
+    cfg: DeployConfig,
+    deps: Dependencies,
+    env: EnvConfig | None = None,
+    replay: dict[str, str] | None = None,
+):
     """활성 서브그래프를 fan-out으로 붙이고 취합 → 렌더 → 발송으로 모은다."""
     env = env or EnvConfig()
     subgraph_cfg = cfg.section(KEY_SUBGRAPHS)
@@ -202,7 +225,7 @@ def build_graph(cfg: DeployConfig, deps: Dependencies, env: EnvConfig | None = N
         # 이 서브그래프만 다른 모델을 쓰고 싶으면 config에 llm 블록을 둔다.
         # 기본 설정 위에 덮어쓰므로 바꿀 키만 적으면 된다.
         #     "kpi.check": { "llm": { "model": "gpt-4o" } }
-        sub_deps = _deps_for(deps, base_llm_cfg, subgraph_cfg[name], env)
+        sub_deps = _deps_for(deps, base_llm_cfg, subgraph_cfg[name], env, replay)
         instance = cls(parsed[name], sub_deps)
 
         # 슬롯 override가 있으면 여기서 갈아끼운다 (config 우선).
@@ -234,10 +257,12 @@ def build_graph(cfg: DeployConfig, deps: Dependencies, env: EnvConfig | None = N
     graph.add_edge("render", "deliver")
     graph.add_edge("deliver", END)
 
-    # 실제 구현에서는 여기에 체크포인터를 붙인다:
-    #   from langgraph.checkpoint.mongodb import MongoDBSaver
-    #   return graph.compile(checkpointer=MongoDBSaver(client, db_name=...))
-    return graph.compile()
+    # 체크포인터를 붙이면 재개·Time Travel·fork가 따라온다.
+    # 노드도 State도 이 결정을 모른다 — compile()에 넘기는 인자일 뿐이다.
+    checkpointer = build_checkpointer(
+        cfg.section(KEY_CHECKPOINT), env, extra_types=(ReportState,)
+    )
+    return graph.compile(checkpointer=checkpointer)
 
 
 _SLOT_ATTR = {

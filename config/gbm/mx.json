@@ -2,6 +2,9 @@
   "stores": {
     "timeout_sec": 5.0
   },
+  "checkpoint": {
+    "backend": "memory"
+  },
   "ports": {
     "production": "redis",
     "line_info": "redis",
@@ -21,7 +24,12 @@
   "subgraphs": {
     "health.connectivity": {
       "enabled": true,
-      "sources": ["redis", "mongodb", "kafka", "rest"],
+      "sources": [
+        "redis",
+        "mongodb",
+        "kafka",
+        "rest"
+      ],
       "latency_warn_ms": 30.0
     },
     "kafka.lag": {
@@ -42,7 +50,9 @@
       "warn_gap_pct": -3.0,
       "critical_gap_pct": -8.0,
       "use_llm_judge": true,
-      "llm": { "model": "fake-judge" }
+      "llm": {
+        "model": "fake-judge"
+      }
     },
     "alarm.trend": {
       "enabled": true,
@@ -61,8 +71,13 @@
     "template": "report.md"
   },
   "delivery": {
-    "file": { "enabled": true },
-    "mail": { "enabled": false, "recipients": [] }
+    "file": {
+      "enabled": true
+    },
+    "mail": {
+      "enabled": false,
+      "recipients": []
+    }
   },
   "schedule": {
     "cron": "0 8 * * *",

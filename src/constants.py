@@ -29,6 +29,7 @@ KEY_LLM = "llm"
 KEY_REPORT = "report"
 KEY_DELIVERY = "delivery"
 KEY_STORES = "stores"
+KEY_CHECKPOINT = "checkpoint"
 KEY_TIMEOUT_SEC = "timeout_sec"
 #: config에 블록은 있지만 아직 읽는 코드가 없다. 상주 스케줄러를 붙일 때 쓴다.
 KEY_SCHEDULE = "schedule"

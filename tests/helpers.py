@@ -22,6 +22,7 @@ from src.config.env import EnvConfig
 from src.config.loader import DeployConfig
 from src.constants import CONFIG_ROOT
 from src.domain.models import BaseContext
+from src.infrastructure.checkpoint import thread_id_for
 
 #: 모든 테스트가 쓰는 고정 시각. as_of가 데이터를 결정하므로 값이 재현된다.
 AS_OF = datetime(2026, 8, 13, 8, 0)
@@ -78,13 +79,24 @@ def with_subgraph_patch(patch: Callable[[dict], Any]) -> dict:
     return cfg
 
 
-def run_graph(cfg: DeployConfig, as_of: datetime = AS_OF) -> dict:
+def run_graph(cfg: DeployConfig, as_of: datetime = AS_OF, **kwargs) -> dict:
     """그래프를 끝까지 돌리고 최종 State를 돌려준다."""
+    return run_graph_with(cfg, as_of=as_of, **kwargs)[0]
+
+
+def run_graph_with(
+    cfg: DeployConfig,
+    as_of: datetime = AS_OF,
+    replay: dict[str, str] | None = None,
+) -> tuple[dict, Any, dict]:
+    """State와 함께 그래프·config도 돌려준다. Time Travel 테스트에 필요하다."""
     env = EnvConfig()
-    deps = build_dependencies(cfg, env)
-    graph = build_graph(cfg, deps, env)
+    deps = build_dependencies(cfg, env, replay=replay)
+    graph = build_graph(cfg, deps, env, replay=replay)
     ctx = BaseContext(as_of=as_of, gbm=GBM, factory=FACTORY)
-    return asyncio.run(graph.ainvoke(ReportState(ctx=ctx)))
+    run_config = {"configurable": {"thread_id": thread_id_for(GBM, FACTORY, as_of)}}
+    state = asyncio.run(graph.ainvoke(ReportState(ctx=ctx), config=run_config))
+    return state, graph, run_config
 
 
 def section(state: dict, key: str):

@@ -63,6 +63,7 @@ python -m src config show --gbm mx --factory gumi
 | [`report`](#report) | 리포트 양식 | |
 | [`delivery`](#delivery) | 발송 채널 | |
 | [`stores`](#stores) | 저장소 접근 정책 | |
+| [`checkpoint`](#checkpoint) | 재개·Time Travel의 저장 백엔드 | |
 | [`schedule`](#schedule) | 스케줄 — **현재 읽지 않음** | |
 
 ---
@@ -256,6 +257,56 @@ SMTP 서버 주소·계정은 `.env`(`SMTP_HOST`, `SMTP_USER`, `SMTP_PWD`)입니
 > 채널을 하나도 안 켜면 리포트는 생성되지만 아무 데도 나가지 않습니다.
 
 **멱등성**: 발송 이력은 State의 `delivered`에 남아 체크포인터에 저장되므로, 재개해도 같은 채널로 두 번 나가지 않습니다.
+
+---
+
+## `checkpoint`
+
+노드가 끝날 때마다 State를 저장합니다. 이게 있어야 재개·Time Travel·fork가 됩니다.
+
+| 키 | 타입 | 기본값 | 의미 |
+|---|---|---|---|
+| `backend` | `"memory"` \| `"none"` \| `"mongodb"` | `"memory"` | 저장 위치 |
+
+```json
+{ "checkpoint": { "backend": "memory" } }
+```
+
+| 값 | 동작 |
+|---|---|
+| `"memory"` | 프로세스 메모리. **Time Travel과 fork가 완전히 동작**하지만 재시작하면 사라집니다 |
+| `"none"` | 체크포인트 없음. 리포트는 정상 생성되지만 이력 조회가 막힙니다 |
+| `"mongodb"` | **미지원** — `langgraph-checkpoint-mongodb` 패키지가 필요한데 이 환경에 없습니다. 고르면 설치 안내와 함께 부팅이 멈춥니다 |
+
+### thread_id
+
+한 실행은 `{gbm}:{factory}:{as_of}`로 식별됩니다.
+
+```
+mx:gumi:20260813T0800
+```
+
+같은 `as_of`로 다시 돌리면 같은 스레드에 이어집니다. **`as_of`를 밖에서 주입하기로 한 결정이 여기서 값을 합니다** — 어제 실행을 날짜로 찾아갈 수 있습니다.
+
+### 체크포인트 보기
+
+```bash
+python -m src run --gbm mx --factory gumi --show-checkpoints
+```
+
+```
+체크포인트 (thread_id=mx:gumi:20260813T0800)
+  step -1  다음: __start__                1f196bc9-c51b-...
+  step  0  다음: health.connectivity, kafka.lag, ...  1f196bc9-c51c-...
+  step  1  다음: aggregate                1f196bc9-c532-...
+  step  2  다음: render                   1f196bc9-c533-...
+  step  3  다음: deliver                  1f196bc9-c534-...
+  step  4  다음: (완료)                    1f196bc9-c535-...
+```
+
+여기 나온 `checkpoint_id`로 특정 시점 State를 열거나(`aget_state`), 값을 바꿔 그 지점부터 다시 돌릴 수 있습니다(`aupdate_state` → `ainvoke`).
+
+> **직렬화**: State에 우리 Pydantic 모델이 실리므로 복원 가능한 타입을 명시해야 합니다. `domain/models.py`의 클래스는 자동 수집되고, `ReportState`는 조립 시점에 주입됩니다 — `infrastructure`가 `application`을 import하면 의존 방향이 뒤집히기 때문입니다.
 
 ---
 

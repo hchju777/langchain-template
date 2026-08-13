@@ -12,6 +12,7 @@ LLM과 붙는 코드가 어디냐"는 질문의 답이 ChatModelAdapter의 그 �
 
 from __future__ import annotations
 
+import json
 import random
 import re
 from typing import Any
@@ -103,12 +104,26 @@ class BaseLLMAdapter:
 
         LLM이 든 evidence id가 실제 입력에 없으면 그 판정을 버린다.
         이 검증은 LLM 없이 돌기 때문에 항상 신뢰할 수 있다.
+
+        trace에는 판정을 **JSON으로** 남긴다. "3건의 판정" 같은 요약만
+        남기면 replay로 복원할 수 없고, 무엇을 근거로 뭘 판정했는지도
+        나중에 확인할 수 없다.
         """
         if not allowed_ids:
             return []
 
-        raw = await self._judge_raw(prompt, allowed_ids)
-        self._record(node, prompt, f"{len(raw)}건의 판정")
+        key = self._replay_key(node, prompt)
+        if key in self._replay:
+            payload = self._replay[key]
+            raw = [Judgement(**j) for j in json.loads(payload)]
+            self._record(node, prompt, payload, replayed=True)
+        else:
+            raw = await self._judge_raw(prompt, allowed_ids)
+            payload = json.dumps(
+                [j.model_dump(mode="json") for j in raw], ensure_ascii=False
+            )
+            self._record(node, prompt, payload)
+
         return self._enforce_evidence(node, raw, set(allowed_ids))
 
     def _enforce_evidence(
@@ -275,8 +290,20 @@ class ChatModelAdapter(BaseLLMAdapter):
 
 
 # --------------------------------------------------------------------------
+def replay_map(traces: list[LLMTrace]) -> dict[str, str]:
+    """저장된 trace를 replay 캐시 형태로 바꾼다.
+
+    같은 노드에 같은 프롬프트가 오면 저장된 응답을 그대로 돌려주므로,
+    LLM을 고정한 채 후속 로직만 고쳐가며 디버깅할 수 있다.
+    """
+    return {f"{t.node}|{hash(t.prompt)}": t.response for t in traces}
+
+
 def build_llm(
-    llm_cfg: dict, base_url: str = "", api_key: str = ""
+    llm_cfg: dict,
+    base_url: str = "",
+    api_key: str = "",
+    replay: dict[str, str] | None = None,
 ) -> BaseLLMAdapter:
     """config + .env → LLM 어댑터. Composition Root에서 호출한다."""
     adapter = llm_cfg.get("adapter", ADAPTER_FAKE)
@@ -285,7 +312,10 @@ def build_llm(
 
     if adapter == ADAPTER_FAKE:
         return FakeLLMAdapter(
-            model=model, temperature=temperature, seed=llm_cfg.get("seed", "")
+            model=model,
+            temperature=temperature,
+            seed=llm_cfg.get("seed", ""),
+            replay=replay,
         )
     if adapter == ADAPTER_CHAT_MODEL:
         return ChatModelAdapter(
@@ -294,6 +324,7 @@ def build_llm(
             provider=llm_cfg.get("provider", "openai_compatible"),
             base_url=base_url,
             api_key=api_key,
+            replay=replay,
         )
     raise ValueError(
         f"알 수 없는 llm.adapter '{adapter}'. "
