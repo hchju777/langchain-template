@@ -192,5 +192,44 @@ class SharedUsecaseTest(unittest.TestCase):
         self.assertIn("run_report", inspect.getsource(cli_mod._run))
 
 
+class OptionalDependencyTest(unittest.TestCase):
+    """APScheduler는 스케줄러를 쓸 때만 필요하다.
+
+    cli가 최상단에서 scheduler를 import하면 패키지가 없는 환경에서
+    registry·config show·run까지 전부 ImportError로 죽는다.
+    """
+
+    def test_cli는_apscheduler를_최상단에서_import하지_않는다(self):
+        import ast
+        import pathlib
+
+        source = pathlib.Path("src/presentation/cli.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        top_level_imports = [
+            node.module or ""
+            for node in tree.body  # 함수 안이 아니라 모듈 최상단만
+            if isinstance(node, ast.ImportFrom)
+        ]
+        self.assertNotIn(
+            "src.infrastructure.scheduler",
+            top_level_imports,
+            "scheduler는 _scheduler() 안에서 지연 import해야 한다",
+        )
+
+    def test_scheduler_모듈만_apscheduler를_필요로_한다(self):
+        import pathlib
+
+        for path in pathlib.Path("src").rglob("*.py"):
+            if path.name == "scheduler.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "import apscheduler",
+                text,
+                f"{path}가 apscheduler를 직접 import한다",
+            )
+            self.assertNotIn("from apscheduler", text, f"{path}가 apscheduler를 import한다")
+
+
 if __name__ == "__main__":
     unittest.main()

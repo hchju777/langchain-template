@@ -33,8 +33,12 @@ from src.domain.models import LLMTrace
 from src.infrastructure.checkpoint import thread_id_for
 from src.infrastructure.llm import replay_map
 from src.infrastructure.lock import LockBusyError, RunLock
-from src.infrastructure.scheduler import build_scheduler, describe, run_once
 from src.presentation.renderers import TemplateError
+
+# scheduler 모듈은 여기서 import하지 않는다. APScheduler를 끌어오는데,
+# 그걸 최상단에서 부르면 스케줄러를 안 쓰는 사람도 패키지가 없으면
+# `registry`·`config show`·`run`까지 전부 ImportError로 죽는다.
+# `_scheduler()` 안에서 지연 import한다.
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -173,6 +177,16 @@ async def _run(args) -> int:
 
 async def _scheduler(args) -> int:
     """상주 모드. config의 cron으로 리포트를 돌린다."""
+    try:
+        from src.infrastructure.scheduler import build_scheduler, describe, run_once
+    except ImportError as exc:
+        print(
+            f"\n✗ 스케줄러에는 APScheduler가 필요합니다: {exc}\n"
+            "  pip install -r requirements.txt\n"
+            "  (다른 명령은 이것 없이도 동작합니다)\n"
+        )
+        return 2
+
     gbm, factory, env = _resolve(args)
 
     try:

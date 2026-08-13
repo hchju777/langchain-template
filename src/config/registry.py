@@ -159,7 +159,7 @@ def all_nodes() -> dict[str, Callable]:
 def validate_config(
     subgraph_config: dict[str, Any], routed_kinds: set[str] | None = None
 ) -> dict[str, BaseModel]:
-    """부팅 3중 검증. 하나라도 실패하면 프로세스를 띄우지 않는다.
+    """부팅 검증. 하나라도 실패하면 프로세스를 띄우지 않는다.
 
     1. 이름 대조   — config의 이름이 레지스트리에 있는가 / 레지스트리 고아가 있는가
     2. 스키마 검증 — 각 서브그래프 config가 자기 BaseModel을 만족하는가

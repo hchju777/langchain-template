@@ -64,7 +64,7 @@ python -m src config show --gbm mx --factory gumi
 | [`delivery`](#delivery) | 발송 채널 | |
 | [`stores`](#stores) | 저장소 접근 정책 | |
 | [`checkpoint`](#checkpoint) | 재개·Time Travel의 저장 백엔드 | |
-| [`schedule`](#schedule) | 스케줄 — **현재 읽지 않음** | |
+| [`schedule`](#schedule) | 스케줄 — `python -m src scheduler`가 읽습니다 | |
 
 ---
 
@@ -276,7 +276,7 @@ SMTP 서버 주소·계정은 `.env`(`SMTP_HOST`, `SMTP_USER`, `SMTP_PWD`)입니
 |---|---|
 | `"memory"` | 프로세스 메모리. **Time Travel과 fork가 완전히 동작**하지만 재시작하면 사라집니다 |
 | `"none"` | 체크포인트 없음. 리포트는 정상 생성되지만 이력 조회가 막힙니다 |
-| `"mongodb"` | **미지원** — `langgraph-checkpoint-mongodb` 패키지가 필요한데 이 환경에 없습니다. 고르면 설치 안내와 함께 부팅이 멈춥니다 |
+| `"mongodb"` | **영속**. 프로세스가 재시작해도 중단 지점부터 재개됩니다. `.env`의 `MONGODB_URI`·`CHECKPOINT_DB`를 씁니다 |
 
 ### thread_id
 
@@ -305,6 +305,16 @@ python -m src run --gbm mx --factory gumi --show-checkpoints
 ```
 
 여기 나온 `checkpoint_id`로 특정 시점 State를 열거나(`aget_state`), 값을 바꿔 그 지점부터 다시 돌릴 수 있습니다(`aupdate_state` → `ainvoke`).
+
+연결이 안 되면 **부팅에서 멈춥니다** — 저장이 안 되는 채로 도는 것보다 낫기 때문입니다.
+
+```
+✗ MongoDB에 연결할 수 없습니다: mongodb://...
+  ServerSelectionTimeoutError: ...
+MONGODB_URI를 확인하거나, 서버 없이 개발 중이라면 checkpoint.backend를 'memory'로 두세요.
+```
+
+> 체크포인트는 계속 쌓입니다. 데이터용 DB와 분리하고 TTL 인덱스나 주기적 정리를 계획하세요.
 
 > **직렬화**: State에 우리 Pydantic 모델이 실리므로 복원 가능한 타입을 명시해야 합니다. `domain/models.py`의 클래스는 자동 수집되고, `ReportState`는 조립 시점에 주입됩니다 — `infrastructure`가 `application`을 import하면 의존 방향이 뒤집히기 때문입니다.
 

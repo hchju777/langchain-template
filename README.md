@@ -5,13 +5,20 @@
 특정 서비스 하나를 위한 앱이 아니라, GBM/FCT(사업부/공장)마다 **config만 바꿔 찍어내는 골격**입니다. 분석 대상 도메인은 고정되어 있지 않습니다.
 
 **처음이시면 [튜토리얼](docs/tutorial.md)부터 보세요** — Redis에서 데이터를 가져와 로직을 돌리고 리포트 섹션으로 내보내기까지 15분짜리 실습입니다.
+**하려는 일이 이미 정해졌으면 [작업별 가이드](docs/howto.md)**에서 바로 찾으세요.
 
 | 문서 | 내용 |
 |---|---|
 | [튜토리얼](docs/tutorial.md) | 새 분석을 처음부터 만들어보는 실습 |
+| [작업별 가이드](docs/howto.md) | "무엇을 하고 싶은가"로 찾는 색인. Time Travel·replay 등은 여기에만 있음 |
+| [용어집·판단 가이드](docs/glossary.md) | 용어 정리와 "언제 무엇을 고를까" |
 | [config 레퍼런스](docs/config-reference.md) | 모든 설정 항목의 의미·기본값·어느 계층에 둘지 |
+| [실제 연결로 전환](docs/going-live.md) | 스텁 → 실제 DB·LLM 상세 절차 (⚠ 미검증) |
 | [테스트](tests/README.md) | 실행 방법과 새 분석 테스트 작성법 |
 | [설계 문서](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md) | 왜 이렇게 설계했는지, 검토했다 버린 대안들 |
+| [ref/](ref/README.md) | **LangGraph 프레임워크 자체.** State·리듀서·`Command`·체크포인터가 왜 그렇게 생겼는지 |
+
+위 일곱은 **이 템플릿 사용법**이고, `ref/`는 **LangGraph 문법·개념** 자체입니다. 템플릿 규약(4슬롯, `Command` 라우팅, `as_of` 주입)이 왜 그런지 궁금해지면 `ref/`로 내려가세요.
 
 ---
 
@@ -228,7 +235,7 @@ Hexagonal은 **방향축**(driving/driven), Clean은 **관심사축**(presentati
 | Interface Adapters | `presentation/` (controller·presenter) + `infrastructure/` (gateway) |
 | Frameworks & Drivers | `infrastructure/` 안의 pymongo·httpx·aiokafka 호출부 |
 
-`domain/ports.py`가 이 셋을 잇는 계약입니다. `MetricPort`는 `infrastructure`가, `ReportRendererPort`는 `presentation`이 구현하고, `application`은 어느 쪽도 import하지 않습니다.
+`domain/ports.py`가 이 셋을 잇는 계약입니다. `DataPort`·`HealthPort`는 `infrastructure`가, `ReportRendererPort`는 `presentation`이 구현하고, `application`은 어느 쪽도 import하지 않습니다.
 
 ---
 
@@ -264,7 +271,7 @@ subgraphs/kafka/lag.py  →  "kafka.lag"
 
 그래서 config의 이름만 보면 파일 위치를 압니다. 다만 이건 경로 문자열이 아니라 **레지스트리 키**입니다 — 파일을 옮기거나 이름을 바꿀 때 `@register("kafka.lag")`로 고정하면 config를 건드리지 않아도 됩니다.
 
-### 3. 부팅 시 3중 검증
+### 3. 부팅 시 검증
 
 하나라도 실패하면 프로세스가 뜨지 않고, **모든 문제를 모아서 한 번에** 보고합니다. 3단 merge 환경에서 하나씩 고치며 재시작하는 건 고통스럽기 때문입니다.
 
@@ -349,7 +356,7 @@ mx/asan  → 재고 1,263ea · 시간당 219ea 소비                      (기�
 
 ## 새 분석 추가하기
 
-**파일 1개 + config 1줄**이면 끝납니다. 아래는 요약이고, 실제 데이터 조회부터 공장별 임계치까지 단계별로 따라 하려면 **[튜토리얼](docs/tutorial.md)**을 보세요.
+**파일 1개 + config 2줄**이면 끝납니다. 아래는 요약이고, 단계별로 따라 하려면 **[튜토리얼](docs/tutorial.md)**을 보세요.
 
 ### 1) 파일을 놓습니다
 
@@ -369,9 +376,11 @@ class Defect(BaseSubgraph):
     title = "불량률 점검"
     config_model = DefectConfig
     context_type = SnapshotContext    # 구간이면 HistoricalContext
+    required_kinds = ("defect",)      # config의 ports에 매핑이 있어야 한다
 
     async def process(self, state: SubgraphState) -> dict:
-        records = await self.deps.rest.fetch(state.scoped, FetchSpec(kind="defect"))
+        # 저장소를 모른다 — kind만 말하면 config의 ports가 어댑터를 정한다
+        records = await self.deps.data.fetch(state.scoped, FetchSpec(kind="defect"))
         metrics, judgements = [], []
         for rec in records:
             ppm = rec.record["ppm"]
@@ -390,11 +399,24 @@ class Defect(BaseSubgraph):
 
 ### 2) config에 씁니다
 
+분석을 켜고, **데이터를 어디서 가져올지**도 알려줍니다.
+
 ```json
-{ "subgraphs": { "quality.defect": { "enabled": true, "threshold_ppm": 300 } } }
+{
+  "subgraphs": { "quality.defect": { "enabled": true, "threshold_ppm": 300 } },
+  "ports":     { "defect": "rest" }
+}
 ```
 
-이게 전부입니다. 리포트 섹션도 자동으로 생기고, 템플릿은 고칠 게 없습니다.
+`ports` 매핑이 빠지면 부팅에서 막힙니다.
+
+```
+✗ 서브그래프 'quality.defect'이 요청하는 'defect'을(를) 어디서 가져올지 'ports'에 없습니다.
+```
+
+새 `kind`라면 대상 어댑터의 `supported_kinds`에도 넣고 조회 로직을 구현해야 합니다 — 그러지 않으면 역시 부팅에서 거부됩니다.
+
+리포트 섹션은 자동으로 생기고 템플릿은 고칠 게 없습니다.
 
 ### 슬롯만 갈아끼우기
 
@@ -600,7 +622,7 @@ config 한 줄입니다.
 `langchain-openai` 같은 공급자 패키지는 **`chat_model`을 고를 때만** 로드됩니다. 알 수 없는 값을 쓰면 부팅 시 막힙니다.
 
 ```
-ValueError: 알 수 없는 llm.adapter 'gpt'. 가능: fake, chat_model
+✗ 알 수 없는 llm.adapter 'gpt'. 가능: fake, chat_model
 ```
 
 ### 모델 바꾸기
@@ -724,58 +746,27 @@ LangGraph가 fan-out을 자동 병렬 실행하고, 취합 노드는 전부 끝�
 
 ## 실제 연결로 전환
 
-### 데이터 소스
+바꿔야 할 곳은 **네 군데**뿐이고, **서브그래프 코드는 하나도 안 바뀝니다.**
 
-`src/infrastructure/stores.py`의 각 어댑터에 실제 호출이 주석으로 있습니다. `fake_data` 호출을 그것으로 바꾸고 `fake_data.py`를 지우면 됩니다.
+| 무엇 | 어디 | 바꾸는 것 |
+|---|---|---|
+| 저장소 조회 | `src/infrastructure/stores.py` | `fake_data` 호출 → 실제 쿼리 |
+| 접속 정보 | `.env` | 주소·계정·비밀번호 |
+| LLM | config `llm.adapter` | `"fake"` → `"chat_model"` |
+| 체크포인터 | config `checkpoint.backend` | `"memory"` → `"mongodb"` |
 
-```python
-async def _do():
-    # 지금:
-    return fake_data.redis_production(ctx.as_of)
-    # 실제:
-    # keys = await self._client.keys(pattern)
-    # return await self._client.mget(keys)
-```
-
-`_to_domain` 호출 위치와 `BaseAdapter._call`(타임아웃·재시도)은 그대로 둡니다.
-
-### LLM
-
-**코드를 고칠 필요가 없습니다.** 실제 어댑터가 이미 구현되어 있고, config에서 고릅니다.
+뒤의 둘은 **코드를 고칠 필요가 없습니다** — 실제 어댑터가 이미 구현돼 있어 config에서 고르기만 하면 됩니다.
 
 ```json
-{ "llm": { "adapter": "chat_model", "provider": "openai_compatible", "model": "gpt-4o-mini" } }
-```
-```bash
-# .env
-LLM_BASE_URL=http://llm-gateway.internal/v1
-LLM_API_KEY=...
+{
+  "llm": { "adapter": "chat_model", "provider": "openai_compatible", "model": "gpt-4o-mini" },
+  "checkpoint": { "backend": "mongodb" }
+}
 ```
 
-자세한 내용은 [LLM 연결과 모델 교체](#llm-연결과-모델-교체)를 보세요.
+드라이버별 상세 절차(커넥션 수명, `Decimal128`·`ObjectId` 처리, Kafka 오프셋 조회, 전환 순서)는 **[실제 연결로 전환](docs/going-live.md)**에 있습니다.
 
-### 체크포인터
-
-**배선은 이미 되어 있습니다.** config에서 백엔드만 고릅니다.
-
-```json
-{ "checkpoint": { "backend": "memory" } }
-```
-
-지금은 `memory`만 동작합니다 — 이 환경에 `langgraph-checkpoint-mongodb`가 없어 설치할 수 없습니다. 프로세스 안에서 **Time Travel과 fork는 완전히 동작**하고, 재시작 후 재개만 불가능합니다.
-
-실제 백엔드로 바꾸려면 [checkpoint.py](src/infrastructure/checkpoint.py)의 주석 한 곳만 살리면 됩니다.
-
-```python
-# from langgraph.checkpoint.mongodb import MongoDBSaver
-# return MongoDBSaver(client, db_name=env.checkpoint_database, serde=_serializer(extra_types))
-```
-
-그래프 조립도, 노드도, State도 그대로입니다 — 체크포인터는 `compile()`에 넘기는 인자일 뿐입니다.
-
-### 렌더러
-
-지금은 표준 라이브러리(`string.Template`)로 템플릿을 채웁니다 — 이 환경에 pip/uv가 없어 Jinja2를 설치할 수 없었습니다. 반복문·조건문이 필요해지면 Jinja2 어댑터를 추가하고 `Dependencies`에서 바꿔 끼우면 됩니다. `ReportRendererPort` 뒤에 있으므로 노드와 템플릿 사용법(config의 `report.template`)은 그대로입니다.
+> **렌더러**: 지금은 표준 라이브러리(`string.Template`)로 템플릿을 채웁니다. 반복문·조건문이 필요해지면 Jinja2 어댑터를 추가하고 `Dependencies`에서 바꿔 끼우면 됩니다 — `ReportRendererPort` 뒤에 있어 노드와 config 사용법은 그대로입니다.
 
 ---
 
@@ -784,7 +775,6 @@ LLM_API_KEY=...
 | | 상태 | 비고 |
 |---|---|---|
 | 어댑터 테스트 | **의도적으로 없음** | 나머지 4개 층은 [tests/](tests/README.md)에 있습니다. 어댑터만 안 만들기로 한 이유는 [설계 문서 §11](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md) |
-| 체크포인터 (영속) | memory만 동작 | Time Travel·fork는 프로세스 안에서 완전히 동작합니다. **재시작 후 재개**만 불가 — `langgraph-checkpoint-mongodb` 패키지가 이 환경에 없습니다 |
 | 분산 락 | 같은 호스트만 | 파일 락(`.locks/`)이라 여러 호스트에 스케줄러를 띄우면 겹칠 수 있습니다. Mongo 유니크 인덱스 같은 공유 저장소 락이 필요 |
 
 `fake_data.py`는 `as_of`로 난수 시드를 고정하므로 **같은 `as_of`는 항상 같은 데이터**를 돌려줍니다. 실제 연결 전에도 멱등성을 확인할 수 있습니다.

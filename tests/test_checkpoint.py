@@ -46,11 +46,23 @@ class BuildCheckpointerTest(unittest.TestCase):
     def test_none이면_체크포인터를_안_붙인다(self):
         self.assertIsNone(build_checkpointer({"backend": BACKEND_NONE}))
 
-    def test_mongodb는_설치가_필요하다고_알려준다(self):
+    def test_mongodb에_접속_주소가_없으면_실패한다(self):
         with self.assertRaises(CheckpointerUnavailableError) as ctx:
-            build_checkpointer({"backend": BACKEND_MONGODB})
-        self.assertIn("langgraph-checkpoint-mongodb", str(ctx.exception))
-        self.assertIn(BACKEND_MEMORY, str(ctx.exception), "대안을 알려줘야 한다")
+            build_checkpointer({"backend": BACKEND_MONGODB}, env=None)
+        self.assertIn("MONGODB_URI", str(ctx.exception))
+
+    def test_mongodb_연결_실패는_원인을_알려준다(self):
+        """raw pymongo traceback 대신 무엇을 고쳐야 하는지 보여야 한다."""
+
+        class Env:
+            mongodb_uri = "mongodb://127.0.0.1:1"  # 아무도 없는 포트
+            checkpoint_database = "x"
+
+        with self.assertRaises(CheckpointerUnavailableError) as ctx:
+            build_checkpointer({"backend": BACKEND_MONGODB}, env=Env())
+        message = str(ctx.exception)
+        self.assertIn("MongoDB에 연결할 수 없습니다", message)
+        self.assertIn(BACKEND_MEMORY, message, "대안을 알려줘야 한다")
 
     def test_알_수_없는_백엔드는_실패한다(self):
         with self.assertRaises(ValueError):

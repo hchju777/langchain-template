@@ -8,7 +8,15 @@ python -m unittest discover -s tests -t . -v     # 자세히
 
 가상환경을 활성화하지 않았다면 `python` 자리에 `.venv/bin/python`(Linux·macOS) 또는 `.venv\Scripts\python.exe`(Windows).
 
-> `pytest`가 설치돼 있지 않아 표준 라이브러리 `unittest`로 작성했습니다.
+`pytest`가 설치돼 있으면 같은 테스트를 그대로 실행하면서 더 나은 출력과 선택 실행을 쓸 수 있습니다.
+
+```bash
+pytest tests -q
+pytest tests -k "override"        # 이름으로 골라서
+pytest tests/test_lock.py -v
+```
+
+> 테스트는 표준 라이브러리 `unittest`로 작성돼 있어 pytest 없이도 돕니다.
 
 ## 구성
 

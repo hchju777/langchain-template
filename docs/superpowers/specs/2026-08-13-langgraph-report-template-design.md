@@ -362,7 +362,9 @@ LLM 호출은 전부 어댑터 하나를 거친다. 프롬프트 렌더링 → �
 
 ### replay 모드
 
-`--replay <thread_id>`로 저장된 LLM 응답을 재생한다. "리포트가 이상한데 LLM 판단이 틀린 건지 취합 로직이 틀린 건지"를 분리하는 용도이며, 노드 캐시 데코레이터와 같은 메커니즘 위에 올라간다.
+`--replay <PATH>`로 저장된 LLM 응답을 재생한다. "리포트가 이상한데 LLM 판단이 틀린 건지 취합 로직이 틀린 건지"를 분리하는 용도이며, 노드 캐시 데코레이터와 같은 메커니즘 위에 올라간다.
+
+> 구현된 인자는 **thread_id가 아니라 파일 경로**다. `--save-traces PATH`로 먼저 저장하고 그 파일을 `--replay PATH`로 넘긴다. 매칭 키가 `노드명 + 프롬프트 전문`이라 저장할 때와 **같은 `as_of`**를 써야 재생된다 — 사용법은 [작업별 가이드](../../howto.md#디버깅--llm-고정하고-재현) 참조.
 
 ### 공급자 교체
 
@@ -438,7 +440,8 @@ class ReportSection(BaseModel):
 ```bash
 python -m app run --gbm mx --factory gumi                            # as_of = 지금
 python -m app run --gbm mx --factory gumi --as-of 2026-08-12T08:00   # 재실행
-python -m app run ... --replay <thread_id>                           # LLM 고정 재현
+python -m app run ... --save-traces traces.json                      # LLM 응답 저장
+python -m app run ... --replay traces.json                           # LLM 고정 재현
 python -m app config show --gbm mx --factory gumi                    # 병합 결과 + 출처
 python -m app scheduler                                               # 상주 모드
 ```
