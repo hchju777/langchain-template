@@ -10,6 +10,21 @@
 
 기준 버전: **LangGraph 1.2.x (2026년 8월 기준 stable)**. 예제의 기본 LLM 공급자는 **OpenAI**로 통일했습니다.
 
+> **이 저장소와의 관계**: `ref/`는 **LangGraph 프레임워크 자체**를 다룹니다. 이 저장소를 **템플릿으로 쓰는 법**은 [README](../README.md) · [튜토리얼](../docs/tutorial.md) · [작업별 가이드](../docs/howto.md)에 있습니다.
+>
+> 템플릿의 규약이 왜 그렇게 생겼는지 궁금할 때 아래 대응표로 내려오세요.
+
+| 템플릿에서 보게 되는 것 | 무엇의 적용인가 | 개념 문서 |
+|---|---|---|
+| 서브그래프 **4슬롯** (`validate_input`/`process`/`generate_output`/`handle_error`) | 서브그래프 + 조건부 라우팅 | [04-subgraphs](04-subgraphs.md), [02-stategraph-basics](02-stategraph-basics.md#23-edge--라우팅) |
+| 슬롯 간 이동에 **정적 엣지를 안 쓰고 `Command`만** 쓰는 이유 | `Command`는 정적 엣지를 대체하지 않고 *추가*로 동작함 | [02-stategraph-basics](02-stategraph-basics.md#25-command--상태-업데이트--라우팅을-한-번에) |
+| `sections`의 `merge_sections`, `errors`의 `operator.add` | 리듀서 | [02-stategraph-basics](02-stategraph-basics.md#21-state--스키마와-리듀서) |
+| 6개 서브그래프가 **병렬로 돌고** `aggregate`에서 모이는 것 | fan-out + 자연스러운 barrier | [02-stategraph-basics](02-stategraph-basics.md#23-edge--라우팅) |
+| `as_of`를 밖에서 주입하고 노드에서 `datetime.now()`를 금지하는 이유 | 재개·Time Travel·멱등성 | [03-memory-and-persistence](03-memory-and-persistence.md) |
+| `thread_id` · `--show-checkpoints` · fork | 체크포인터와 Time Travel | [03-memory-and-persistence](03-memory-and-persistence.md#32-time-travel--replay와-fork) |
+| `--stream`의 노드별 진행 표시 | `stream_mode="updates"` | [05-streaming](05-streaming.md) |
+| 환각 가드레일(근거 id 검증) | 결정론적 가드레일 | [09-guardrails](09-guardrails.md) |
+
 ## 읽는 순서
 
 이 순서는 wikidocs 가이드북의 Part 구성을 그대로 따릅니다.
