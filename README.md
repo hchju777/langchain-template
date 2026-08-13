@@ -6,7 +6,11 @@
 
 **처음이시면 [튜토리얼](docs/tutorial.md)부터 보세요** — Redis에서 데이터를 가져와 로직을 돌리고 리포트 섹션으로 내보내기까지 15분짜리 실습입니다.
 
-설계 배경과 결정 이유는 [설계 문서](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md)에 있습니다.
+| 문서 | 내용 |
+|---|---|
+| [튜토리얼](docs/tutorial.md) | 새 분석을 처음부터 만들어보는 실습 |
+| [config 레퍼런스](docs/config-reference.md) | 모든 설정 항목의 의미·기본값·어느 계층에 둘지 |
+| [설계 문서](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md) | 왜 이렇게 설계했는지, 검토했다 버린 대안들 |
 
 ---
 

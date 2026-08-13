@@ -625,4 +625,5 @@ LLM 호출을 줄이고 싶으면 `output` 슬롯을 공유 부품으로 바꿉�
 ## 다음으로
 
 - [README](../README.md) — 전체 구조, 설정 두 축(config/`.env`), 리포트 템플릿, 실제 DB 연결로 전환
+- [config 레퍼런스](config-reference.md) — 모든 설정 항목의 의미·기본값·어느 계층에 둘지
 - [설계 문서](superpowers/specs/2026-08-13-langgraph-report-template-design.md) — 왜 이렇게 설계했는지, 검토했다가 버린 대안들
