@@ -102,11 +102,13 @@ python -m src run --gbm mx --factory gumi --stream
    ┌──────────────┐                            ┌──────────────────┐
    │ CLI          │──→  ┌─────────────┐   ──→  │ Mongo/Redis/REST │
    │ (controller) │     │ application │        │ Kafka Admin, LLM │
-   ├──────────────┤     │      ↓      │   ──→  │ 파일 쓰기, SMTP   │
-   │ renderers    │←──  │   domain    │        │ (Scheduler)      │
-   │ templates    │     └─────────────┘        └──────────────────┘
-   │ (presenter)  │
-   └──────────────┘
+   ├──────────────┤     │  run_report │   ──→  │ 파일 쓰기, SMTP   │
+   │ renderers    │←──  │      ↓      │        │ 체크포인터        │
+   │ templates    │     │   domain    │   ──→  │ Scheduler ───┐   │
+   │ (presenter)  │     └─────────────┘        └──────────────│───┘
+   └──────────────┘            ↑                              │
+                               └──────────────────────────────┘
+                          스케줄러도 같은 유스케이스를 부른다
 ```
 
 ```
@@ -132,6 +134,7 @@ src/
 │   │   └── material/stock_gumi.py    → "material.stock_gumi" (슬롯 전용)
 │   ├── nodes/                  ← 공유 슬롯 부품
 │   │   └── outputs.py            "outputs.no_llm"
+│   ├── usecase.py                run_report — CLI와 스케줄러가 공유
 │   └── decorators.py             with_timing / with_error_handling / with_cache
 │
 ├── presentation/               ← 무엇을 어떻게 보여줄 것인가
@@ -146,6 +149,8 @@ src/
 │   ├── stores.py                 Redis/Mongo/Kafka/REST 어댑터
 │   ├── router.py                 kind → 어댑터 라우팅 (config의 ports)
 │   ├── checkpoint.py             재개·Time Travel의 저장 백엔드
+│   ├── scheduler.py              APScheduler 상주 모드
+│   ├── lock.py                   중복 실행 방지 (크로스 플랫폼 파일 락)
 │   ├── fake_data.py              ★ 실제 구현에서는 통째로 사라짐
 │   ├── llm.py                    LLM 단일 경로 + 가드레일 + replay
 │   └── delivery.py               파일 쓰기 / SMTP 발송
@@ -709,6 +714,7 @@ LangGraph가 fan-out을 자동 병렬 실행하고, 취합 노드는 전부 끝�
 | `run ... --save-traces PATH` | LLM 프롬프트·응답을 JSON으로 저장 |
 | `run ... --replay PATH` | 저장된 응답을 재생 (LLM 고정) |
 | `run ... --show-checkpoints` | 실행 후 체크포인트 목록 |
+| `scheduler --gbm --factory [--once]` | 상주 모드로 cron 실행 |
 | `config show --gbm --factory` | 병합 결과 + 각 값의 출처 |
 | `registry` | 등록된 서브그래프·노드 부품 목록 |
 
@@ -779,9 +785,7 @@ LLM_API_KEY=...
 |---|---|---|
 | 어댑터 테스트 | **의도적으로 없음** | 나머지 4개 층은 [tests/](tests/README.md)에 있습니다. 어댑터만 안 만들기로 한 이유는 [설계 문서 §11](docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md) |
 | 체크포인터 (영속) | memory만 동작 | Time Travel·fork는 프로세스 안에서 완전히 동작합니다. **재시작 후 재개**만 불가 — `langgraph-checkpoint-mongodb` 패키지가 이 환경에 없습니다 |
-| 상주 스케줄러 | 미구현 | CLI만 있음. 설계상 `infrastructure/scheduler.py` |
-| `schedule` config | **읽는 코드 없음** | `config/gbm/mx.json`에 `cron`/`timezone` 블록이 있지만 현재 무시됩니다. 스케줄러를 붙일 때 사용 |
-| 중복 실행 락 | 미구현 | Mongo `{gbm,factory,as_of}` 유니크 인덱스 예정 |
+| 분산 락 | 같은 호스트만 | 파일 락(`.locks/`)이라 여러 호스트에 스케줄러를 띄우면 겹칠 수 있습니다. Mongo 유니크 인덱스 같은 공유 저장소 락이 필요 |
 
 `fake_data.py`는 `as_of`로 난수 시드를 고정하므로 **같은 `as_of`는 항상 같은 데이터**를 돌려줍니다. 실제 연결 전에도 멱등성을 확인할 수 있습니다.
 

@@ -18,8 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from src.application.graph.builder import build_dependencies, build_graph
-from src.application.graph.state import ReportState
+from src.application.usecase import run_report
 from src.config.env import EnvConfig
 from src.config.loader import DeployConfig
 from src.config.registry import (
@@ -29,10 +28,12 @@ from src.config.registry import (
     discover,
     is_slot_only,
 )
-from src.constants import KEY_SUBGRAPHS
-from src.domain.models import BaseContext, LLMTrace
+from src.constants import LOCK_ROOT
+from src.domain.models import LLMTrace
 from src.infrastructure.checkpoint import thread_id_for
 from src.infrastructure.llm import replay_map
+from src.infrastructure.lock import LockBusyError, RunLock
+from src.infrastructure.scheduler import build_scheduler, describe, run_once
 from src.presentation.renderers import TemplateError
 
 
@@ -70,6 +71,15 @@ def _parser() -> argparse.ArgumentParser:
     show.add_argument("--gbm")
     show.add_argument("--factory")
 
+    sched = sub.add_parser("scheduler", help="상주 모드로 스케줄 실행")
+    sched.add_argument("--gbm")
+    sched.add_argument("--factory")
+    sched.add_argument(
+        "--once",
+        action="store_true",
+        help="스케줄을 기다리지 않고 즉시 한 번만 실행 (배선 확인용)",
+    )
+
     sub.add_parser("registry", help="등록된 서브그래프 목록")
     return p
 
@@ -95,82 +105,100 @@ async def _run(args) -> int:
         saved = [LLMTrace(**t) for t in json.loads(path.read_text(encoding="utf-8"))]
         replay = replay_map(saved)
 
-    # 부팅 검증은 전부 여기서 끝난다. 템플릿 로드(build_dependencies)와
-    # config·레지스트리 대조(build_graph)가 모두 이 블록 안에 있어야
-    # 사용자가 raw traceback 대신 안내를 본다.
-    try:
-        deps = build_dependencies(cfg, env, replay=replay)
-        graph = build_graph(cfg, deps, env, replay=replay)
-    except (ConfigValidationError, TemplateError, ValueError, KeyError) as exc:
-        print(f"\n✗ {exc}\n")
-        return 2
-
-    ctx = BaseContext(as_of=as_of, gbm=gbm, factory=factory)
-    initial = ReportState(ctx=ctx)
-
-    # 같은 (gbm, factory, as_of)는 같은 스레드. 재개할 때 무엇을 이어받을지가
-    # 자명해지고, 과거 실행을 날짜로 찾아갈 수 있다.
-    thread_id = thread_id_for(gbm, factory, as_of)
-    run_config = {"configurable": {"thread_id": thread_id}}
-
     print(f"▶ {gbm}/{factory} · as_of={as_of.isoformat(timespec='seconds')}")
     if replay:
         print(f"  replay: {len(replay)}건의 저장된 응답을 재생합니다")
 
+    # 중복 실행 방지. 스케줄러와 같은 락을 쓰므로, 배치가 도는 중에 손으로
+    # 같은 as_of를 돌리면 여기서 막힌다.
+    lock = RunLock(thread_id_for(gbm, factory, as_of), LOCK_ROOT)
     try:
-        if args.stream:
-            # updates로 진행을 표시하면서 values로 최종 State를 받는다.
-            # 그래프를 두 번 돌리면 발송이 두 번 나간다.
-            state = {}
-            async for mode, chunk in graph.astream(
-                initial, stream_mode=["updates", "values"], config=run_config
-            ):
-                if mode == "updates":
-                    for node in chunk:
-                        print(f"  · {node}")
-                else:
-                    state = chunk
-        else:
-            state = await graph.ainvoke(initial, config=run_config)
-    finally:
-        await deps.close()
+        lock.acquire()
+    except LockBusyError as exc:
+        print(f"\n✗ {exc}\n")
+        return 3
 
-    rendered = state.get("rendered") or ""
+    # 부팅 검증 실패는 여기서 잡는다. 사용자가 raw traceback 대신 안내를 본다.
+    try:
+        run = await run_report(
+            gbm,
+            factory,
+            as_of,
+            env=env,
+            replay=replay,
+            on_node=(lambda node: print(f"  · {node}")) if args.stream else None,
+        )
+    except (ConfigValidationError, TemplateError, ValueError, KeyError) as exc:
+        print(f"\n✗ {exc}\n")
+        return 2
+    finally:
+        lock.release()
+
     if not args.quiet:
         print()
-        print(rendered)
+        print(run.rendered)
 
-    for record in state.get("delivered", []):
+    for record in run.delivered:
         print(f"✓ 발송[{record.channel}] → {record.target}")
 
     # 서브그래프마다 다른 LLM을 쓸 수 있으므로 어댑터가 아니라 State에서 읽는다.
-    for drop in state.get("guardrail_drops", []):
+    for drop in run.guardrail_drops:
         print(f"⚠ 가드레일: {drop}")
 
-    errors = state.get("errors", [])
-    for err in errors:
+    for err in run.errors:
         print(f"⚠ 부분 실패: {err.key}.{err.slot} — {err.message}")
-
-    traces = state.get("traces", [])
 
     if args.save_traces:
         path = Path(args.save_traces)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps([t.model_dump() for t in traces], ensure_ascii=False, indent=2),
+            json.dumps(
+                [t.model_dump() for t in run.traces], ensure_ascii=False, indent=2
+            ),
             encoding="utf-8",
         )
-        print(f"✓ trace {len(traces)}건 저장 → {path}")
+        print(f"✓ trace {len(run.traces)}건 저장 → {path}")
 
     if args.show_checkpoints:
-        await _print_checkpoints(graph, run_config)
+        await _print_checkpoints(run.graph, run.run_config)
 
-    replayed = sum(1 for t in traces if t.replayed)
-    summary = f"\nLLM 호출 {len(traces)}건"
+    replayed = sum(1 for t in run.traces if t.replayed)
+    summary = f"\nLLM 호출 {len(run.traces)}건"
     if replayed:
         summary += f" (재생 {replayed}건)"
-    summary += f" · 서브그래프 {len(state.get('sections', []))}건"
+    summary += f" · 서브그래프 {len(run.sections)}건"
     print(summary)
+    return 0
+
+
+async def _scheduler(args) -> int:
+    """상주 모드. config의 cron으로 리포트를 돌린다."""
+    gbm, factory, env = _resolve(args)
+
+    try:
+        scheduler, expression, timezone = build_scheduler(gbm, factory, env=env)
+    except (ConfigValidationError, ValueError, KeyError) as exc:
+        print(f"\n✗ {exc}\n")
+        return 2
+
+    print(f"▶ 스케줄러 시작 — {gbm}/{factory}")
+    print(describe(expression, timezone))
+    print("  Ctrl+C로 종료합니다.\n")
+
+    if args.once:
+        print("  --once: 스케줄을 기다리지 않고 한 번만 실행합니다")
+        ran = await run_once(gbm, factory, env=env)
+        return 0 if ran else 3
+
+    scheduler.start()
+    try:
+        # 스케줄러가 백그라운드에서 도는 동안 이벤트 루프를 살려둔다.
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\n종료합니다.")
+    finally:
+        scheduler.shutdown(wait=False)
     return 0
 
 
@@ -266,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run(args))
     if args.command == "config":
         return _config_show(args)
+    if args.command == "scheduler":
+        return asyncio.run(_scheduler(args))
     if args.command == "registry":
         return _registry_list()
     return 1

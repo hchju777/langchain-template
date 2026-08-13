@@ -8,6 +8,8 @@ SRC_ROOT = Path(__file__).resolve().parent
 CONFIG_ROOT = PROJECT_ROOT / "config"
 TEMPLATE_ROOT = SRC_ROOT / "presentation" / "templates"
 OUTPUT_ROOT = PROJECT_ROOT / "output"
+#: 중복 실행 락 파일. 같은 호스트 안에서만 유효하다.
+LOCK_ROOT = PROJECT_ROOT / ".locks"
 
 # config 병합 계층 (뒤가 앞을 덮어씀)
 CONFIG_LAYER_GBM = "gbm"
@@ -31,7 +33,6 @@ KEY_DELIVERY = "delivery"
 KEY_STORES = "stores"
 KEY_CHECKPOINT = "checkpoint"
 KEY_TIMEOUT_SEC = "timeout_sec"
-#: config에 블록은 있지만 아직 읽는 코드가 없다. 상주 스케줄러를 붙일 때 쓴다.
 KEY_SCHEDULE = "schedule"
 
 # 어댑터 기본 정책

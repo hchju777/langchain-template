@@ -312,13 +312,72 @@ python -m src run --gbm mx --factory gumi --show-checkpoints
 
 ## `schedule`
 
-> **현재 읽는 코드가 없습니다.** `config/gbm/mx.json`에 블록은 있지만 무시됩니다. 상주 스케줄러를 붙일 때 사용할 자리입니다.
+상주 스케줄러가 언제 리포트를 돌릴지.
+
+| 키 | 타입 | 기본값 | 의미 |
+|---|---|---|---|
+| `cron` | str | `"0 8 * * *"` | 표준 5필드 cron (분 시 일 월 요일) |
+| `timezone` | str | `"Asia/Seoul"` | IANA 타임존 이름 |
 
 ```json
 { "schedule": { "cron": "0 8 * * *", "timezone": "Asia/Seoul" } }
 ```
 
-지금 배치를 돌리려면 외부 cron이나 k8s CronJob에서 CLI를 호출하세요.
+```bash
+python -m src scheduler --gbm mx --factory gumi
+```
+
+```
+▶ 스케줄러 시작 — mx/gumi
+cron '0 8 * * *' (Asia/Seoul)
+  다음 실행: 2026-08-14 08:00:00 KST
+  다음 실행: 2026-08-15 08:00:00 KST
+```
+
+배선만 확인하려면 스케줄을 기다리지 않고 즉시 한 번 돌릴 수 있습니다.
+
+```bash
+python -m src scheduler --gbm mx --factory gumi --once
+```
+
+### ⚠ 요일 숫자는 표준 cron과 다릅니다
+
+|  | 0 | 1 | 2 | … | 6 |
+|---|---|---|---|---|---|
+| 표준 cron (crontab) | 일 | **월** | 화 | | 토 |
+| APScheduler (여기) | 월 | **화** | 수 | | 일 |
+
+**`0 8 * * 1`은 crontab에서 월요일이지만 여기서는 화요일입니다.** 자동 변환하지 않습니다 — `*/2`나 `1-5/2`처럼 스텝이 섞이면 변환 규칙이 지저분해지고 APScheduler 문서와도 어긋나기 때문입니다.
+
+**이름을 쓰세요.** 그러면 애매함이 없습니다.
+
+```json
+{ "schedule": { "cron": "0 8 * * mon-fri" } }
+```
+
+숫자로 쓰면 부팅 시 경고가 뜹니다.
+
+```
+cron '0 8 * * 1'의 요일 '1'이 숫자입니다. APScheduler는 0=월요일이라
+표준 cron(0=일요일)과 하루씩 어긋납니다. 이름으로 쓰는 편이 안전합니다.
+```
+
+### 중복 실행 방지
+
+`{gbm}:{factory}:{as_of}`마다 **파일 락**을 잡습니다(`.locks/`). 두 가지를 막습니다.
+
+- 상주 프로세스가 둘 이상 뜬 경우 (롤링 배포 중 겹침, HA 이중화)
+- 이전 실행이 다음 스케줄을 넘겨 아직 도는 경우 — APScheduler의 `max_instances=1`이 같은 프로세스 안에서, 파일 락이 프로세스 간에서 막습니다
+
+`python -m src run`도 같은 락을 씁니다. 배치가 도는 중에 손으로 같은 `as_of`를 돌리면 종료 코드 `3`으로 막힙니다.
+
+6시간이 지난 락은 죽은 프로세스가 남긴 것으로 보고 강탈합니다.
+
+> **파일 락은 같은 호스트 안에서만 유효합니다.** 여러 호스트에서 스케줄러를 띄운다면 Mongo의 `{gbm, factory, as_of}` 유니크 인덱스 같은 공유 저장소 기반 락이 필요합니다.
+
+### 외부 cron을 쓴다면
+
+상주 모드 대신 crontab이나 k8s CronJob에서 CLI를 직접 부르는 것도 됩니다. 그 경우 `schedule` 블록은 쓰이지 않습니다.
 
 ```bash
 python -m src run --gbm mx --factory gumi
