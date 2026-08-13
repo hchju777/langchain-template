@@ -215,7 +215,7 @@ records = await self.deps.data.fetch(state.scoped, FetchSpec(kind="material_stoc
 
 파일이 없으면 **부팅 시 멈춥니다**: `✗ 템플릿 파일이 없습니다: .../report_typo.md`
 
-양식 문법과 새 템플릿 만드는 법은 [README의 리포트 템플릿](../README.md#리포트-템플릿)에 있습니다.
+양식 문법과 새 템플릿 만드는 법은 [README의 리포트 템플릿](config-reference.md#report)에 있습니다.
 
 ---
 

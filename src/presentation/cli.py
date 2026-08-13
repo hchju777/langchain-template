@@ -30,10 +30,20 @@ from src.config.registry import (
 )
 from src.constants import LOCK_ROOT
 from src.domain.models import LLMTrace
-from src.infrastructure.checkpoint import thread_id_for
+from src.infrastructure.checkpoint import CheckpointerUnavailableError, thread_id_for
 from src.infrastructure.llm import replay_map
 from src.infrastructure.lock import LockBusyError, RunLock
 from src.presentation.renderers import TemplateError
+
+#: 부팅 단계에서 날 수 있는 실패. 사용자에게 raw traceback 대신 안내를 보인다.
+#: 새 검증을 추가하면 여기에도 넣어야 한다.
+BOOT_ERRORS = (
+    ConfigValidationError,
+    TemplateError,
+    CheckpointerUnavailableError,
+    ValueError,
+    KeyError,
+)
 
 # scheduler 모듈은 여기서 import하지 않는다. APScheduler를 끌어오는데,
 # 그걸 최상단에서 부르면 스케줄러를 안 쓰는 사람도 패키지가 없으면
@@ -98,8 +108,6 @@ async def _run(args) -> int:
     gbm, factory, env = _resolve(args)
     as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.now()
 
-    cfg = DeployConfig(gbm, factory)
-
     replay = None
     if args.replay:
         path = Path(args.replay)
@@ -132,7 +140,7 @@ async def _run(args) -> int:
             replay=replay,
             on_node=(lambda node: print(f"  · {node}")) if args.stream else None,
         )
-    except (ConfigValidationError, TemplateError, ValueError, KeyError) as exc:
+    except BOOT_ERRORS as exc:
         print(f"\n✗ {exc}\n")
         return 2
     finally:
@@ -191,7 +199,7 @@ async def _scheduler(args) -> int:
 
     try:
         scheduler, expression, timezone = build_scheduler(gbm, factory, env=env)
-    except (ConfigValidationError, ValueError, KeyError) as exc:
+    except BOOT_ERRORS as exc:
         print(f"\n✗ {exc}\n")
         return 2
 

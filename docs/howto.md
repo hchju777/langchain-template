@@ -13,12 +13,12 @@
 | [새 분석 추가](#새-분석-추가) | [튜토리얼](tutorial.md) 전체 | ●○○ |
 | [기능 껐다 켜기](#기능-껐다-켜기) | config 한 줄 | ●○○ |
 | [공장마다 다른 임계치](#공장마다-다른-임계치) | [튜토리얼 5단계](tutorial.md) | ●○○ |
-| [공장마다 다른 로직](#공장마다-다른-로직) | [README 핵심개념 6](../README.md#6-gbmfct별-분기는-config로만) | ●●○ |
+| [공장마다 다른 로직](#공장마다-다른-로직) | [README 핵심개념 6](glossary.md#상속으로-만들까-config로-조정할까) | ●●○ |
 | [LLM 서술만 끄기](#llm-서술만-끄기) | config 한 줄 | ●○○ |
 | [리포트 양식 교체](#리포트-양식-교체) | config 한 줄 | ●○○ |
-| [새 템플릿 파일 작성](#새-템플릿-파일-작성) | [README 리포트 템플릿](../README.md#리포트-템플릿) + 아래 변수표 | ●●○ |
-| [실제 LLM으로 전환](#실제-llm으로-전환) | [README LLM 연결](../README.md#llm-연결과-모델-교체) | ●○○ |
-| [서브그래프마다 다른 모델](#서브그래프마다-다른-모델) | [README](../README.md#서브그래프별로-다른-모델) | ●○○ |
+| [새 템플릿 파일 작성](#새-템플릿-파일-작성) | [README 리포트 템플릿](config-reference.md#report) + 아래 변수표 | ●●○ |
+| [실제 LLM으로 전환](#실제-llm으로-전환) | [README LLM 연결](llm.md#실제-llm으로-전환) | ●○○ |
+| [서브그래프마다 다른 모델](#서브그래프마다-다른-모델) | [README](llm.md#서브그래프별로-다른-모델) | ●○○ |
 | [실제 DB로 전환](#실제-db로-전환) | [README 실제 연결로 전환](../README.md#실제-연결로-전환) + 아래 보충 | ●●● |
 | [새 데이터 kind 추가](#새-데이터-kind-추가) | [튜토리얼 1·3단계](tutorial.md) + 아래 보충 | ●●○ |
 | [구간(historical) 분석](#구간historical-분석) | [튜토리얼 "구간 분석으로 만들기"](tutorial.md) | ●●○ |
@@ -86,7 +86,7 @@ class GumiMaterialStock(MaterialStock):
 
 `slot_only=True`가 없으면 다른 공장에서 "고아" 검증에 걸립니다.
 
-→ [README 핵심개념 6](../README.md#6-gbmfct별-분기는-config로만)
+→ [README 핵심개념 6](glossary.md#상속으로-만들까-config로-조정할까)
 
 ### LLM 서술만 끄기
 
@@ -106,7 +106,7 @@ class GumiMaterialStock(MaterialStock):
 
 ### 새 템플릿 파일 작성
 
-`src/presentation/templates/`에 파일을 놓고 config에서 이름을 부르면 끝입니다. 블록 문법과 변수 목록은 [README 리포트 템플릿](../README.md#리포트-템플릿)에 있습니다.
+`src/presentation/templates/`에 파일을 놓고 config에서 이름을 부르면 끝입니다. 블록 문법과 변수 목록은 [README 리포트 템플릿](config-reference.md#report)에 있습니다.
 
 **보충 — 각 변수가 실제로 무엇으로 치환되는가.** 기존 템플릿을 역공학하지 않아도 되도록 정리합니다.
 
@@ -149,7 +149,7 @@ LLM_API_KEY=...
 
 사내 게이트웨이가 OpenAI 호환이면 `.env`의 `LLM_BASE_URL` 교체만으로 끝납니다.
 
-→ [README LLM 연결과 모델 교체](../README.md#llm-연결과-모델-교체)
+→ [README LLM 연결과 모델 교체](llm.md#실제-llm으로-전환)
 
 ### 서브그래프마다 다른 모델
 
@@ -162,7 +162,7 @@ LLM_API_KEY=...
 
 **기본은 fake로 두고 한 서브그래프만 실제 LLM**을 붙이는 게 새 프롬프트를 다듬을 때 유용합니다.
 
-→ [README 서브그래프별로 다른 모델](../README.md#서브그래프별로-다른-모델)
+→ [README 서브그래프별로 다른 모델](llm.md#서브그래프별로-다른-모델)
 
 ### 실제 DB로 전환
 
