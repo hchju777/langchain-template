@@ -1,0 +1,29 @@
+{
+  "stores": {
+    "timeout_sec": 3.0
+  },
+  "subgraphs": {
+    "kafka.lag": {
+      "groups": [
+        "mes-ingest",
+        "kpi-aggregator",
+        "alarm-consumer"
+      ]
+    },
+    "line.equipment": {
+      "warn_down_ratio": 0.2
+    },
+    "material.stock": {
+      "warn_hours": 12.0
+    }
+  },
+  "delivery": {
+    "mail": {
+      "enabled": true,
+      "recipients": [
+        "gumi-ops@example.com"
+      ],
+      "subject_prefix": "[구미 운영리포트]"
+    }
+  }
+}

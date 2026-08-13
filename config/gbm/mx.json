@@ -1,0 +1,62 @@
+{
+  "stores": {
+    "timeout_sec": 5.0
+  },
+  "llm": {
+    "adapter": "fake",
+    "provider": "openai_compatible",
+    "model": "fake-local",
+    "temperature": 0.0,
+    "seed": "mx"
+  },
+  "subgraphs": {
+    "health.connectivity": {
+      "enabled": true,
+      "sources": ["redis", "mongodb", "kafka", "rest"],
+      "latency_warn_ms": 30.0
+    },
+    "kafka.lag": {
+      "enabled": true,
+      "groups": [],
+      "warn_lag": 5000,
+      "critical_lag": 30000,
+      "skew_ratio": 3.0
+    },
+    "line.equipment": {
+      "enabled": true,
+      "warn_down_ratio": 0.25,
+      "critical_down_ratio": 0.5,
+      "achievement_warn_pct": 90.0
+    },
+    "kpi.check": {
+      "enabled": true,
+      "warn_gap_pct": -3.0,
+      "critical_gap_pct": -8.0,
+      "use_llm_judge": true,
+      "llm": { "model": "fake-judge" }
+    },
+    "alarm.trend": {
+      "enabled": true,
+      "window": "P7D",
+      "spike_ratio": 1.5,
+      "min_total": 5,
+      "top_n": 5
+    },
+    "material.stock": {
+      "enabled": true,
+      "warn_hours": 8.0,
+      "critical_hours": 2.0
+    }
+  },
+  "report": {
+    "template": "report.md"
+  },
+  "delivery": {
+    "file": { "enabled": true },
+    "mail": { "enabled": false, "recipients": [] }
+  },
+  "schedule": {
+    "cron": "0 8 * * *",
+    "timezone": "Asia/Seoul"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "llm": {
+    "seed": "gumi-mx"
+  },
+  "subgraphs": {
+    "kafka.lag": {
+      "critical_lag": 20000
+    },
+    "alarm.trend": {
+      "top_n": 4
+    },
+    "material.stock": {
+      "nodes": { "process": "material.stock_gumi" }
+    }
+  }
+}
