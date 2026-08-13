@@ -29,6 +29,7 @@ from src.constants import (
     KEY_DELIVERY,
     KEY_LLM,
     KEY_NODES,
+    KEY_PORTS,
     KEY_REPORT,
     KEY_STORES,
     KEY_SUBGRAPHS,
@@ -40,6 +41,7 @@ from src.constants import (
 )
 from src.infrastructure.delivery import FileDelivery, MailDelivery
 from src.infrastructure.llm import build_llm
+from src.infrastructure.router import DataRouter
 from src.infrastructure.stores import (
     KafkaAdminAdapter,
     MongoAdapter,
@@ -68,10 +70,33 @@ def build_dependencies(cfg: DeployConfig, env: EnvConfig | None = None) -> Depen
     #   KafkaAdminAdapter(bootstrap_servers=env.kafka_bootstrap_servers,
     #                     username=env.kafka_username, password=env.kafka_password)
     #   RestAdapter(base_url=env.rest_base_url, token=env.rest_api_token, timeout=timeout)
-    redis = RedisAdapter(timeout=timeout)
-    mongo = MongoAdapter(timeout=timeout)
-    kafka = KafkaAdminAdapter(timeout=timeout)
-    rest = RestAdapter(timeout=timeout)
+    adapters = {
+        RedisAdapter.name: RedisAdapter(timeout=timeout),
+        MongoAdapter.name: MongoAdapter(timeout=timeout),
+        KafkaAdminAdapter.name: KafkaAdminAdapter(timeout=timeout),
+        RestAdapter.name: RestAdapter(timeout=timeout),
+    }
+
+    # config의 ports가 "무엇을 어디서 가져올지"를 정한다.
+    # 서브그래프는 이 매핑을 모르고 kind만 요청한다.
+    routes = {}
+    for kind, adapter_name in cfg.section(KEY_PORTS).items():
+        adapter = adapters.get(adapter_name)
+        if adapter is None:
+            raise ValueError(
+                f"config의 '{KEY_PORTS}.{kind}'가 가리키는 어댑터 "
+                f"'{adapter_name}'을 찾을 수 없습니다. "
+                f"쓸 수 있는 어댑터: {', '.join(sorted(adapters))}"
+            )
+        # 저장소를 바꾸려면 그쪽 어댑터가 그 kind를 다룰 줄 알아야 한다.
+        # 여기서 안 막으면 실행 중에야 알게 된다.
+        if kind not in adapter.supported_kinds:
+            can = ", ".join(sorted(adapter.supported_kinds)) or "(없음)"
+            raise ValueError(
+                f"어댑터 '{adapter_name}'은 '{kind}'을(를) 다루지 못합니다. "
+                f"이 어댑터가 지원하는 kind: {can}"
+            )
+        routes[kind] = adapter
 
     # adapter/model/temperature는 GBM/FCT별로 다를 수 있어 config JSON에서,
     # base_url/api_key는 환경별로 달라지므로 .env에서 온다.
@@ -106,19 +131,12 @@ def build_dependencies(cfg: DeployConfig, env: EnvConfig | None = None) -> Depen
     )
 
     return Dependencies(
-        redis=redis,
-        mongo=mongo,
-        kafka=kafka,
-        rest=rest,
+        data=DataRouter(routes),
         llm=llm,
         renderer=renderer,
-        health={
-            "redis": redis,
-            "mongodb": mongo,
-            "kafka": kafka,
-            "rest": rest,
-        },
+        health=dict(adapters),
         deliveries=deliveries,
+        adapters=list(adapters.values()),
     )
 
 
@@ -168,8 +186,10 @@ def build_graph(cfg: DeployConfig, deps: Dependencies, env: EnvConfig | None = N
     env = env or EnvConfig()
     subgraph_cfg = cfg.section(KEY_SUBGRAPHS)
 
-    # 부팅 3중 검증. 실패하면 여기서 프로세스가 멈춘다.
-    parsed = validate_config(subgraph_cfg)
+    # 부팅 검증. 실패하면 여기서 프로세스가 멈춘다.
+    # 라우팅된 kind를 함께 넘겨 "이 분석의 데이터가 어디서 오는지" 미지정도 잡는다.
+    routed = deps.data.routed_kinds() if deps.data is not None else None
+    parsed = validate_config(subgraph_cfg, routed_kinds=routed)
     active = enabled_subgraphs(subgraph_cfg)
     if not active:
         raise RuntimeError("활성화된 서브그래프가 없습니다. config를 확인하세요.")

@@ -2,6 +2,15 @@
   "stores": {
     "timeout_sec": 5.0
   },
+  "ports": {
+    "production": "redis",
+    "line_info": "redis",
+    "equipment_status": "redis",
+    "material_stock": "redis",
+    "consumer_lag": "kafka",
+    "kpi": "rest",
+    "alarms": "mongodb"
+  },
   "llm": {
     "adapter": "fake",
     "provider": "openai_compatible",

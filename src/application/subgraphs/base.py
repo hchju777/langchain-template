@@ -105,6 +105,9 @@ class BaseSubgraph:
     config_model: type[SubgraphConfig] = SubgraphConfig
     #: 이 분석이 스냅샷을 보는지 구간을 보는지. validate_input이 이걸로 입력을 만든다.
     context_type: type[BaseContext] = SnapshotContext
+    #: 이 분석이 요청하는 데이터 kind. config의 ports에 매핑이 있어야 하고,
+    #: 없으면 부팅 시 잡힌다. 여기 적어두지 않으면 실행 중에야 알게 된다.
+    required_kinds: tuple[str, ...] = ()
 
     def __init__(self, config: SubgraphConfig, deps: Any) -> None:
         self.config = config

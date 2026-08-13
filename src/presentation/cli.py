@@ -148,6 +148,9 @@ def _registry_list() -> int:
         module = cls.__module__.replace("src.application.subgraphs.", "")
         tag = "  [슬롯 전용]" if is_slot_only(name) else ""
         print(f"  {name:24} {cls.title:22} ← {module}.py{tag}")
+        kinds = getattr(cls, "required_kinds", ())
+        if kinds:
+            print(f"  {'':24} 요청 데이터: {', '.join(kinds)}")
 
     if nodes:
         print(f"\n공유 노드 부품 {len(nodes)}건 (nodes 슬롯 override 대상)\n")

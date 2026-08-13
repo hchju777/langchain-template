@@ -29,6 +29,7 @@ REPLENISH_HOURS = (9, 15)
 class GumiMaterialStock(MaterialStock):
     title = "자재 소진 예상 (구미)"
     config_model = MaterialStockConfig
+    required_kinds = ("material_stock",)
 
     @staticmethod
     def _hours_to_next_replenish(hour: int) -> float:
@@ -40,7 +41,7 @@ class GumiMaterialStock(MaterialStock):
 
     async def process(self, state: SubgraphState) -> dict:
         cfg: MaterialStockConfig = self.config
-        records = await self.deps.redis.fetch(
+        records = await self.deps.data.fetch(
             state.scoped, FetchSpec(kind="material_stock")
         )
         until_replenish = self._hours_to_next_replenish(state.scoped.as_of.hour)

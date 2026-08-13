@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
 
-from src.constants import KEY_ENABLED, KEY_LLM, KEY_NODES, KEY_SUBGRAPHS
+from src.constants import KEY_ENABLED, KEY_LLM, KEY_NODES, KEY_PORTS, KEY_SUBGRAPHS
 
 SUBGRAPH_PACKAGE = "src.application.subgraphs"
 NODE_PACKAGE = "src.application.nodes"
@@ -156,12 +156,16 @@ def all_nodes() -> dict[str, Callable]:
     return dict(_nodes)
 
 
-def validate_config(subgraph_config: dict[str, Any]) -> dict[str, BaseModel]:
+def validate_config(
+    subgraph_config: dict[str, Any], routed_kinds: set[str] | None = None
+) -> dict[str, BaseModel]:
     """부팅 3중 검증. 하나라도 실패하면 프로세스를 띄우지 않는다.
 
     1. 이름 대조   — config의 이름이 레지스트리에 있는가 / 레지스트리 고아가 있는가
     2. 스키마 검증 — 각 서브그래프 config가 자기 BaseModel을 만족하는가
     3. 참조 무결성 — nodes 슬롯 override가 가리키는 이름이 실재하는가
+    4. 데이터 경로 — 서브그래프가 쓰는 kind가 config의 ports에 매핑돼 있는가
+                     (routed_kinds를 넘겼을 때만)
 
     에러를 하나씩 고치며 재시작하는 것은 3단 merge 환경에서 고통스러우므로
     모든 문제를 모아서 한 번에 던진다.
@@ -226,6 +230,22 @@ def validate_config(subgraph_config: dict[str, Any]) -> dict[str, BaseModel]:
                 problems.append(
                     f"'{KEY_SUBGRAPHS}.{name}.{KEY_NODES}.{slot}'가 가리키는 "
                     f"'{node_name}'이 없습니다. 쓸 수 있는 이름: {available}"
+                )
+
+        # 4. 데이터 경로 — 켜져 있는 서브그래프만 본다. 꺼둔 분석의 kind는
+        #    ports에 없어도 상관없다.
+        if routed_kinds is not None and raw.get(KEY_ENABLED):
+            # 슬롯 override로 다른 서브그래프가 대신 돌면 그쪽 kind도 필요하다.
+            needed = set(getattr(cls, "required_kinds", ()))
+            for target in (raw.get(KEY_NODES) or {}).values():
+                donor = _subgraphs.get(target)
+                if donor is not None:
+                    needed |= set(getattr(donor, "required_kinds", ()))
+            for kind in sorted(needed - routed_kinds):
+                mapped = ", ".join(sorted(routed_kinds)) or "(비어 있음)"
+                problems.append(
+                    f"서브그래프 '{name}'이 요청하는 '{kind}'을(를) 어디서 "
+                    f"가져올지 '{KEY_PORTS}'에 없습니다. 매핑된 kind: {mapped}"
                 )
 
     if problems:

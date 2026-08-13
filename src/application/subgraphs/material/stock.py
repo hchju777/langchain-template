@@ -33,13 +33,14 @@ class MaterialStock(BaseSubgraph):
     title = "자재 소진 예상"
     config_model = MaterialStockConfig
     context_type = SnapshotContext  # 현재 재고를 보므로 스냅샷
+    required_kinds = ("material_stock",)
 
     async def process(self, state: SubgraphState) -> dict:
         cfg: MaterialStockConfig = self.config
 
-        # 1) 데이터를 가져온다. 어떤 저장소인지는 몰라도 된다 —
-        #    deps.redis가 SnapshotPort를 구현했다는 것만 안다.
-        records = await self.deps.redis.fetch(
+        # 1) 데이터를 가져온다. 어느 저장소에서 오는지는 몰라도 된다 —
+        #    kind만 말하면 config의 ports가 어댑터를 정한다.
+        records = await self.deps.data.fetch(
             state.scoped, FetchSpec(kind="material_stock")
         )
 

@@ -179,6 +179,7 @@ class MaterialStock(BaseSubgraph):
     title = "자재 소진 예상"
     config_model = MaterialStockConfig
     context_type = SnapshotContext
+    required_kinds = ("material_stock",)
 ```
 
 | 항목 | 의미 |
@@ -187,6 +188,9 @@ class MaterialStock(BaseSubgraph):
 | `title` | 리포트 섹션 제목 |
 | `config_model` | 위에서 만든 스키마 |
 | `context_type` | **현재 상태**를 보면 `SnapshotContext`, **구간**을 보면 `HistoricalContext` |
+| `required_kinds` | 이 분석이 요청하는 데이터 종류. config의 `ports`에 매핑이 없으면 **부팅 시** 잡힙니다 |
+
+`required_kinds`를 빠뜨리면 부팅 검증이 그냥 통과하고, 매핑이 없다는 걸 **실행 중에** 알게 됩니다. 한 줄이니 꼭 적으세요.
 
 `context_type`이 시간 계약을 정합니다. `HistoricalContext`를 고르면 config에 `window`가 **필수**가 되고, `state.scoped`에 `start_dt`/`end_dt`가 채워집니다. 우리는 지금 재고를 보는 거라 스냅샷입니다.
 
@@ -198,8 +202,8 @@ class MaterialStock(BaseSubgraph):
     async def process(self, state: SubgraphState) -> dict:
         cfg: MaterialStockConfig = self.config
 
-        # ① 데이터를 가져온다
-        records = await self.deps.redis.fetch(
+        # ① 데이터를 가져온다 (저장소는 config의 ports가 정한다)
+        records = await self.deps.data.fetch(
             state.scoped, FetchSpec(kind="material_stock")
         )
 
@@ -243,9 +247,13 @@ class MaterialStock(BaseSubgraph):
 
 여기서 지켜야 할 규약이 넷입니다.
 
-**① 저장소 접근은 포트를 거칩니다.** `self.deps.redis`는 `SnapshotPort`를 구현한 어댑터고, 서브그래프는 Redis 키가 어떻게 생겼는지 모릅니다. 그래서 쿼리가 바뀌어도 이 코드는 그대로입니다.
+**① 저장소를 몰라야 합니다.** `self.deps.data`는 역할 기반 라우터입니다. `kind`만 말하면 **config의 `ports`가** 어느 어댑터로 보낼지 정합니다.
 
-> 다만 지금은 **어느 어댑터를 쓸지 config로 고를 수 없습니다.** `build_dependencies`가 하드코딩하고 `Dependencies.redis`처럼 필드명도 기술 이름입니다. 설계 문서 §5의 `ports` 바인딩은 미구현입니다.
+```json
+{ "ports": { "material_stock": "redis" } }
+```
+
+이 한 줄을 `"rest"`로 바꾸면 같은 분석이 REST API에서 재고를 읽습니다. **코드는 한 글자도 안 바뀝니다.** 대신 대상 어댑터가 그 `kind`를 지원해야 하고, 아니면 부팅에서 막힙니다.
 
 **② 규칙으로 쓸 수 있으면 코드로 씁니다.** "재고 ÷ 소비량"과 임계치 비교는 LLM에게 시킬 일이 아닙니다. 느리고 비싸고 가끔 틀립니다.
 
@@ -286,6 +294,24 @@ python -m src run --gbm mx --factory gumi
   }
 }
 ```
+
+### 데이터를 어디서 가져올지도 알려줘야 합니다
+
+여기서 다시 실행하면 또 막힙니다.
+
+```
+✗ 설정 검증에 실패했습니다 (1건):
+  - 서브그래프 'material.stock'이 요청하는 'material_stock'을(를) 어디서
+    가져올지 'ports'에 없습니다. 매핑된 kind: alarms, consumer_lag, ...
+```
+
+`required_kinds`에 적은 `material_stock`이 어느 저장소에서 오는지 정하지 않았기 때문입니다. `ports` 블록에 한 줄 추가합니다.
+
+```json
+{ "ports": { "material_stock": "redis" } }
+```
+
+**나중에 `"rest"`로 바꾸면 같은 분석이 REST에서 재고를 읽습니다** — 코드는 그대로입니다. 다만 대상 어댑터가 그 `kind`를 지원해야 하고, 어댑터마다 지원 목록은 [config 레퍼런스](config-reference.md#ports)에 있습니다.
 
 ---
 

@@ -44,6 +44,12 @@ class RedisAdapter(_PingMixin, BaseAdapter):
     """생산정보 / 라인 정보 / 장비 상태 스냅샷."""
 
     name = "redis"
+    supported_kinds = (
+        "production",
+        "line_info",
+        "equipment_status",
+        "material_stock",
+    )
 
     # 실제 구현:
     # def __init__(self, dsn, password, **kw):
@@ -71,6 +77,7 @@ class MongoAdapter(_PingMixin, BaseAdapter):
     """알람 이력 등 구간 조회의 주력. historical은 Kafka가 아니라 여기서."""
 
     name = "mongodb"
+    supported_kinds = ("alarms",)
 
     # 실제 구현:
     # self._client = AsyncIOMotorClient(dsn, password=...)
@@ -97,6 +104,7 @@ class KafkaAdminAdapter(_PingMixin, BaseAdapter):
     """
 
     name = "kafka"
+    supported_kinds = ("consumer_lag",)
 
     # 실제 구현:
     # self._admin = AIOKafkaAdminClient(bootstrap_servers=..., ...)
@@ -122,6 +130,7 @@ class RestAdapter(_PingMixin, BaseAdapter):
     """KPI 조회. 타임아웃·재시도가 특히 중요한 어댑터."""
 
     name = "rest"
+    supported_kinds = ("kpi", "material_stock")
 
     # 실제 구현:
     # self._client = httpx.AsyncClient(base_url=..., timeout=self.timeout,
@@ -130,6 +139,10 @@ class RestAdapter(_PingMixin, BaseAdapter):
     async def fetch(self, ctx: SnapshotContext, spec: FetchSpec) -> list[Record]:
         async def _do():
             # 실제: r = await self._client.get("/kpi", params={...}); return r.json()
+            if spec.kind == "material_stock":
+                # 같은 데이터를 REST로도 받을 수 있다는 예시.
+                # 서브그래프는 이 차이를 모른다 — config가 어디서 올지 정한다.
+                return fake_data.redis_material_stock(ctx.as_of)
             if spec.kind != "kpi":
                 raise KeyError(f"rest: 알 수 없는 kind '{spec.kind}'")
             return fake_data.rest_kpis(ctx.as_of)

@@ -58,6 +58,7 @@ python -m src config show --gbm mx --factory gumi
 | 블록 | 용도 | 필수 |
 |---|---|---|
 | [`subgraphs`](#subgraphs) | 어떤 분석을 켜고 어떻게 동작시킬지 | ✓ |
+| [`ports`](#ports) | 어떤 데이터를 **어느 저장소**에서 가져올지 | ✓ |
 | [`llm`](#llm) | LLM 어댑터·모델 | |
 | [`report`](#report) | 리포트 양식 | |
 | [`delivery`](#delivery) | 발송 채널 | |
@@ -83,6 +84,75 @@ python -m src config show --gbm mx --factory gumi
 재시도 횟수와 백오프는 config가 아니라 `src/constants.py`의 `DEFAULT_MAX_RETRIES`(2), `DEFAULT_BACKOFF_BASE_SEC`(0.2)입니다.
 
 > 접속 주소·계정은 여기가 아니라 `.env`입니다 (`REDIS_URL`, `MONGODB_URI` 등).
+
+---
+
+## `ports`
+
+**무엇을 어디서 가져올지.** 키는 서브그래프가 요청하는 데이터 종류(`kind`)이고, 값은 어댑터 이름입니다.
+
+```json
+{
+  "ports": {
+    "production":       "redis",
+    "line_info":        "redis",
+    "equipment_status": "redis",
+    "material_stock":   "redis",
+    "consumer_lag":     "kafka",
+    "kpi":              "rest",
+    "alarms":           "mongodb"
+  }
+}
+```
+
+**서브그래프는 이 매핑을 모릅니다.** `kind`만 말하면 라우터가 어댑터를 찾습니다.
+
+```python
+records = await self.deps.data.fetch(state.scoped, FetchSpec(kind="material_stock"))
+```
+
+그래서 저장소를 옮길 때 **분석 코드를 고치지 않습니다** — config 한 줄이면 됩니다.
+
+```json
+{ "ports": { "material_stock": "rest" } }
+```
+
+### 쓸 수 있는 어댑터와 kind
+
+각 어댑터는 자기가 다룰 수 있는 kind를 선언합니다.
+
+| 어댑터 | 지원하는 kind |
+|---|---|
+| `redis` | `production`, `line_info`, `equipment_status`, `material_stock` |
+| `mongodb` | `alarms` |
+| `kafka` | `consumer_lag` |
+| `rest` | `kpi`, `material_stock` |
+
+**저장소 교체는 대상 어댑터가 그 kind를 지원할 때만 됩니다.** 아니면 부팅에서 막힙니다.
+
+```
+✗ 어댑터 'mongodb'은 'material_stock'을(를) 다루지 못합니다.
+  이 어댑터가 지원하는 kind: alarms
+```
+
+새 kind를 추가하려면 어댑터의 `supported_kinds`에 넣고 조회 로직을 구현해야 합니다.
+
+### 부팅 검증
+
+| 상황 | 결과 |
+|---|---|
+| 켜진 서브그래프의 `kind`가 `ports`에 없음 | `서브그래프 'material.stock'이 요청하는 'material_stock'을(를) 어디서 가져올지 'ports'에 없습니다` |
+| 없는 어댑터 이름 | `config의 'ports.kpi'가 가리키는 어댑터 '없는것'을 찾을 수 없습니다` |
+| 어댑터가 그 kind를 지원 안 함 | 위 메시지 |
+
+각 서브그래프가 어떤 kind를 요청하는지는 `python -m src registry`가 보여줍니다.
+
+```
+  material.stock           자재 소진 예상          ← material.stock.py
+                           요청 데이터: material_stock
+```
+
+> **꺼둔 서브그래프의 kind는 매핑이 없어도 됩니다.** 검증은 `enabled: true`인 것만 봅니다.
 
 ---
 
@@ -415,6 +485,16 @@ config 스키마는 `material.stock`과 동일하며, override된 서브그래�
 ```json
 {
   "stores": { "timeout_sec": 5.0 },
+
+  "ports": {
+    "production": "redis",
+    "line_info": "redis",
+    "equipment_status": "redis",
+    "material_stock": "redis",
+    "consumer_lag": "kafka",
+    "kpi": "rest",
+    "alarms": "mongodb"
+  },
 
   "llm": {
     "adapter": "fake",

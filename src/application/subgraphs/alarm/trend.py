@@ -34,11 +34,12 @@ class AlarmTrend(BaseSubgraph):
     title = "알람 추세 (scen_id별)"
     config_model = AlarmTrendConfig
     context_type = HistoricalContext
+    required_kinds = ("alarms",)
 
     async def process(self, state: SubgraphState) -> dict:
         cfg: AlarmTrendConfig = self.config
         ctx: HistoricalContext = state.scoped  # type: ignore[assignment]
-        records = await self.deps.mongo.fetch(ctx, FetchSpec(kind="alarms"))
+        records = await self.deps.data.fetch(ctx, FetchSpec(kind="alarms"))
 
         days = max(1, (ctx.end_dt - ctx.start_dt).days)
         half = days / 2

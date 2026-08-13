@@ -31,6 +31,10 @@ class BaseAdapter:
     """
 
     name: str = "base"
+    #: 이 어댑터가 다룰 줄 아는 kind. config의 ports가 여기 없는 kind를
+    #: 이 어댑터로 보내면 **부팅 시** 막힌다. 선언하지 않으면 "저장소를
+    #: 바꿨는데 실행 중에야 터지는" 상황이 생긴다.
+    supported_kinds: tuple[str, ...] = ()
 
     def __init__(
         self,

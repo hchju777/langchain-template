@@ -36,8 +36,20 @@ class HealthPort(Protocol):
 
 
 @runtime_checkable
+class DataPort(Protocol):
+    """서브그래프가 데이터를 요청하는 유일한 창구.
+
+    `spec.kind`가 **무엇을 원하는지**를 말하고, 그것이 어느 저장소에서
+    오는지는 config가 정한다. 그래서 서브그래프는 Redis인지 REST인지
+    모르고, 저장소를 옮겨도 코드가 바뀌지 않는다.
+    """
+
+    async def fetch(self, ctx: BaseContext, spec: FetchSpec) -> list[Record]: ...
+
+
+@runtime_checkable
 class SnapshotPort(Protocol):
-    """as_of 시점의 현재 값."""
+    """as_of 시점의 현재 값을 주는 어댑터가 만족하는 계약."""
 
     async def fetch(self, ctx: SnapshotContext, spec: FetchSpec) -> list[Record]: ...
 

@@ -25,10 +25,11 @@ class KafkaLag(BaseSubgraph):
     title = "Kafka Lag 상태"
     config_model = KafkaLagConfig
     context_type = SnapshotContext
+    required_kinds = ("consumer_lag",)
 
     async def process(self, state: SubgraphState) -> dict:
         cfg: KafkaLagConfig = self.config
-        records = await self.deps.kafka.fetch(
+        records = await self.deps.data.fetch(
             state.scoped,
             FetchSpec(kind="consumer_lag", filters={"groups": cfg.groups}),
         )

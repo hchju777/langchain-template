@@ -28,15 +28,16 @@ class LineEquipment(BaseSubgraph):
     title = "라인별 장비 상태"
     config_model = LineEquipmentConfig
     context_type = SnapshotContext
+    required_kinds = ("production", "line_info", "equipment_status")
 
     async def process(self, state: SubgraphState) -> dict:
         cfg: LineEquipmentConfig = self.config
-        redis = self.deps.redis
+        data = self.deps.data
         ctx = state.scoped
 
-        production = await redis.fetch(ctx, FetchSpec(kind="production"))
-        line_info = await redis.fetch(ctx, FetchSpec(kind="line_info"))
-        equipment = await redis.fetch(ctx, FetchSpec(kind="equipment_status"))
+        production = await data.fetch(ctx, FetchSpec(kind="production"))
+        line_info = await data.fetch(ctx, FetchSpec(kind="line_info"))
+        equipment = await data.fetch(ctx, FetchSpec(kind="equipment_status"))
         records = [*production, *line_info, *equipment]
 
         prod_by_line = {r.metadata["line"]: r for r in production}

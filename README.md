@@ -755,7 +755,6 @@ LLM_API_KEY=...
 | 체크포인터 | 미연결 | Time Travel·재개 미동작 |
 | 상주 스케줄러 | 미구현 | CLI만 있음. 설계상 `infrastructure/scheduler.py` |
 | `schedule` config | **읽는 코드 없음** | `config/gbm/mx.json`에 `cron`/`timezone` 블록이 있지만 현재 무시됩니다. 스케줄러를 붙일 때 사용 |
-| `ports` 바인딩 | **미구현** | 설계 문서 §5의 `{"ports": {"metric": "mongo"}}`로 저장소를 고르는 기능. 지금은 `build_dependencies`가 어댑터를 하드코딩하고 `Dependencies.redis`처럼 필드명이 기술 이름입니다 |
 | 중복 실행 락 | 미구현 | Mongo `{gbm,factory,as_of}` 유니크 인덱스 예정 |
 | replay 모드 | 어댑터만 준비 | `--replay` 플래그 미연결 |
 

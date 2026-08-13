@@ -25,10 +25,11 @@ class KpiCheck(BaseSubgraph):
     title = "KPI 점검"
     config_model = KpiCheckConfig
     context_type = SnapshotContext
+    required_kinds = ("kpi",)
 
     async def process(self, state: SubgraphState) -> dict:
         cfg: KpiCheckConfig = self.config
-        records = await self.deps.rest.fetch(state.scoped, FetchSpec(kind="kpi"))
+        records = await self.deps.data.fetch(state.scoped, FetchSpec(kind="kpi"))
 
         metrics, judgements = [], []
         for rec in records:

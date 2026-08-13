@@ -51,7 +51,7 @@ def run(coro):
 class MaterialStockTest(unittest.TestCase):
     def _process(self, records, **overrides):
         cfg = MaterialStockConfig(enabled=True, **overrides)
-        sub = MaterialStock(cfg, FakeDeps(redis=FakePort(records)))
+        sub = MaterialStock(cfg, FakeDeps(data=FakePort(records)))
         return run(sub.process(SubgraphState(ctx=CTX, scoped=CTX)))
 
     def test_소진_시간을_재고와_소비량으로_계산한다(self):
@@ -96,7 +96,7 @@ class GumiMaterialStockTest(unittest.TestCase):
             as_of=datetime(2026, 8, 13, as_of_hour, 0), gbm="mx", factory="gumi"
         )
         cfg = MaterialStockConfig(enabled=True, **overrides)
-        sub = GumiMaterialStock(cfg, FakeDeps(redis=FakePort(records)))
+        sub = GumiMaterialStock(cfg, FakeDeps(data=FakePort(records)))
         return run(sub.process(SubgraphState(ctx=ctx, scoped=ctx)))
 
     def test_다음_입고_시각까지의_여유로_판정한다(self):
@@ -123,7 +123,7 @@ class GumiMaterialStockTest(unittest.TestCase):
         records = [stock("L1", "MAT-A", 500, 100)]  # 5시간치
         base = MaterialStock(
             MaterialStockConfig(enabled=True, warn_hours=8.0),
-            FakeDeps(redis=FakePort(records)),
+            FakeDeps(data=FakePort(records)),
         )
         base_out = run(base.process(SubgraphState(ctx=CTX, scoped=CTX)))
         # 8시 기준 다음 입고는 9시 → 여유 4시간
@@ -143,7 +143,7 @@ class KafkaLagTest(unittest.TestCase):
 
     def _process(self, records, **overrides):
         cfg = KafkaLagConfig(enabled=True, **overrides)
-        sub = KafkaLag(cfg, FakeDeps(kafka=FakePort(records)))
+        sub = KafkaLag(cfg, FakeDeps(data=FakePort(records)))
         return run(sub.process(SubgraphState(ctx=CTX, scoped=CTX)))
 
     def test_그룹별로_lag을_합산한다(self):
@@ -167,7 +167,7 @@ class KafkaLagTest(unittest.TestCase):
 
     def test_그룹_필터가_포트로_전달된다(self):
         port = FakePort([])
-        sub = KafkaLag(KafkaLagConfig(enabled=True, groups=["a"]), FakeDeps(kafka=port))
+        sub = KafkaLag(KafkaLagConfig(enabled=True, groups=["a"]), FakeDeps(data=port))
         run(sub.process(SubgraphState(ctx=CTX, scoped=CTX)))
         self.assertEqual(port.calls[0][1].filters["groups"], ["a"])
 

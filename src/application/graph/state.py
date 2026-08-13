@@ -36,18 +36,22 @@ class Dependencies:
     """프로세스 시작 시 한 번 만들어 조립 시점에 주입한다.
 
     노드가 매번 연결을 열면 상주 스케줄러 환경에서 커넥션이 샌다.
+
+    **기술 이름 필드가 없다.** 서브그래프는 `data`(역할 기반 라우터)만
+    쓰고, 어느 저장소에서 오는지는 config의 ports가 정한다.
     """
 
-    redis: Any = None
-    mongo: Any = None
-    kafka: Any = None
-    rest: Any = None
+    #: 서브그래프의 유일한 데이터 창구. kind로 어댑터를 찾는다.
+    data: Any = None
     llm: Any = None
     renderer: Any = None
+    #: 헬스체크는 "어느 저장소가 붙는가"를 보는 것이라 기술 이름이 맞다.
     health: dict[str, Any] = field(default_factory=dict)
     deliveries: list[Any] = field(default_factory=list)
+    #: 수명 관리 대상. close()가 순회한다.
+    adapters: list[Any] = field(default_factory=list)
 
     async def close(self) -> None:
-        for adapter in (self.redis, self.mongo, self.kafka, self.rest):
+        for adapter in self.adapters:
             if adapter is not None and hasattr(adapter, "close"):
                 await adapter.close()
