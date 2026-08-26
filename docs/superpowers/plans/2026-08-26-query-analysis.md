@@ -1159,7 +1159,7 @@ Expected: PASS — `references`가 기본값 빈 목록이라 기존 config가 �
 - [ ] **Step 8: 커밋**
 
 ```bash
-git add src/domain/models.py src/domain/ports.py src/infrastructure/references.py src/application/graph/state.py src/application/graph/builder.py tests/test_references.py
+git add src/domain/models.py src/domain/ports.py src/infrastructure/references.py src/application/graph/state.py src/application/graph/builder.py tests/test_references.py tests/README.md
 git commit -m "Supply background documents through a ReferencePort
 
 Files are read at composition time so a wrong path stops the boot
