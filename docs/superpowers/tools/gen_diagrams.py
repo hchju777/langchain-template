@@ -1,8 +1,23 @@
-"""메모용 아키텍처 다이어그램 SVG 생성기."""
+"""메모용 아키텍처 다이어그램 생성기.
+
+SVG를 그린 뒤 headless Chrome으로 2배 해상도 PNG까지 만든다. 창 크기는
+각 SVG의 실제 크기에서 그대로 가져오므로 손으로 맞출 일이 없다.
+
+    python3 docs/superpowers/tools/gen_diagrams.py
+"""
 from pathlib import Path
 
-OUT = Path("/home/hchju777/langchain_ws/langchain-template/docs/images")
+from _common import IMAGES as OUT, rel, run_chrome, warn_no_chrome
+
 OUT.mkdir(parents=True, exist_ok=True)
+
+#: 파일명 → (너비, 높이). PNG 렌더링 창 크기로 쓴다.
+SIZES: dict[str, tuple[int, int]] = {}
+
+
+def save(name: str, svg: str, w: int, h: int) -> None:
+    (OUT / f"{name}.svg").write_text(svg, encoding="utf-8")
+    SIZES[name] = (w, h)
 
 FONT = "'Noto Sans CJK KR','Noto Sans KR',sans-serif"
 
@@ -158,7 +173,7 @@ s += label(460, 552, "한계 — 질의를 받을 입구가 없고, 돌아가는
 s += legend(40, 606, [(BG_LLM, BD_LLM, "LLM 사용"), (BG_GUARD, BD_GUARD, "가드레일"),
                       (BG_INFRA, BD_INFRA, "코드 전용")])
 s += "</svg>"
-(OUT / "arch-current.svg").write_text(s, encoding="utf-8")
+save("arch-current", s, W, H)
 
 # ══════════════════════════════════════════════════════════
 # 그림 2 — 최종 구조
@@ -248,7 +263,7 @@ s += label(82, 800, "향후 — ReferencePort를 RAG 어댑터로 교체 · "
                     "decide_next를 tool-calling으로 교체 (교체 지점이 각각 한 곳에 모여 있다)",
            12.5, "#8a6d1f", "start")
 s += "</svg>"
-(OUT / "arch-target.svg").write_text(s, encoding="utf-8")
+save("arch-target", s, W, H)
 
 # ══════════════════════════════════════════════════════════
 # 그림 3 — 서브그래프 내부
@@ -301,6 +316,27 @@ s += label(60, 448, "설계 근거 — 오류 탐지 정확도는 최고 52.87%�
                     "따라서 '언제 확인할지'는 코드가, '무엇이 문제인지'는 LLM이 맡는다.",
            12.3, INK, "start")
 s += "</svg>"
-(OUT / "subgraph-process.svg").write_text(s, encoding="utf-8")
+save("subgraph-process", s, W, H)
 
-print("ok")
+
+# ══════════════════════════════════════════════════════════
+# SVG → PNG
+# ══════════════════════════════════════════════════════════
+rendered = 0
+for name, (w, h) in SIZES.items():
+    svg, png = OUT / f"{name}.svg", OUT / f"{name}.png"
+    ok = run_chrome(
+        "--force-device-scale-factor=2",      # 2배 해상도
+        "--default-background-color=ffffff",
+        f"--window-size={w},{h}",             # SVG 크기 그대로. 손으로 맞출 일이 없다
+        f"--screenshot={png}",
+        svg.as_uri(),
+    )
+    if not ok:
+        break
+    rendered += 1
+    print(f"  {rel(svg)}  →  {rel(png)}  ({w}×{h} @2x)")
+
+print(f"\nSVG {len(SIZES)}장, PNG {rendered}장을 만들었습니다.")
+if rendered < len(SIZES):
+    warn_no_chrome("PNG")
