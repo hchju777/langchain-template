@@ -203,7 +203,11 @@ ALLOWED = ["material.stock", "kpi.check", "line.equipment"]
 
 def plan(prompt: str, allowed: list[str] | None = None):
     llm = FakeLLMAdapter(model="fake-local", seed="test")
-    req = asyncio.run(llm.plan("analyze_query", prompt, allowed or ALLOWED))
+    # `allowed or ALLOWED`로 쓰면 빈 목록이 falsy라 기본값으로 새어, 정작
+    # "허용된 분석이 없을 때"를 검증하는 테스트가 그 경로를 타지 못한다.
+    req = asyncio.run(
+        llm.plan("analyze_query", prompt, ALLOWED if allowed is None else allowed)
+    )
     return req, llm
 
 
