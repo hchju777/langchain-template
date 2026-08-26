@@ -28,6 +28,7 @@ from src.domain.models import (
     Metric,
     Record,
     ReportSection,
+    Requirement,
     Severity,
     SnapshotContext,
     SubgraphError,
@@ -63,6 +64,8 @@ class SubgraphState(BaseModel):
     guardrail_drops: list[str] = Field(default_factory=list)
     section: ReportSection | None = None
     error: SubgraphError | None = None
+    #: 질의 분석 결과. 서술의 초점에만 쓰고 숫자와 판정은 건드리지 않는다.
+    requirement: Requirement | None = None
 
 
 def guarded(key: str, slot: str, goto_ok: str) -> Callable:
@@ -174,6 +177,12 @@ class BaseSubgraph:
             f"[{self.title}] 아래 사실을 2~3문장으로 요약하세요. "
             f"숫자를 새로 만들지 말고 아래 값만 인용하세요.\n{facts}"
         )
+        # 질의가 바꾸는 것은 서술의 초점뿐이다. 위의 사실 목록은 그대로다.
+        if state.requirement and state.requirement.focus:
+            prompt += (
+                "\n\n특히 다음에 주목해 서술하세요: "
+                f"{', '.join(state.requirement.focus)}"
+            )
         return await self.deps.llm.narrate(self.registry_name, prompt)
 
     # ------------------------------------------------------------------

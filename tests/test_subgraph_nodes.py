@@ -9,11 +9,15 @@ import asyncio
 import unittest
 from datetime import datetime
 
+from src.application.graph.state import Dependencies
 from src.application.subgraphs.base import SubgraphState
 from src.application.subgraphs.kafka.lag import KafkaLag, KafkaLagConfig
+from src.application.subgraphs.kpi.check import KpiCheck, KpiCheckConfig
 from src.application.subgraphs.material.stock import MaterialStock, MaterialStockConfig
 from src.application.subgraphs.material.stock_gumi import GumiMaterialStock
-from src.domain.models import Record, Severity, SnapshotContext
+from src.domain.models import Metric, Record, Requirement, Severity, SnapshotContext
+from src.infrastructure.llm import FakeLLMAdapter
+from tests.helpers import AS_OF
 
 CTX = SnapshotContext(as_of=datetime(2026, 8, 13, 8, 0), gbm="mx", factory="gumi")
 
@@ -170,6 +174,36 @@ class KafkaLagTest(unittest.TestCase):
         sub = KafkaLag(KafkaLagConfig(enabled=True, groups=["a"]), FakeDeps(data=port))
         run(sub.process(SubgraphState(ctx=CTX, scoped=CTX)))
         self.assertEqual(port.calls[0][1].filters["groups"], ["a"])
+
+
+class NarrationFocusTest(unittest.TestCase):
+    """질의가 바꾸는 것은 서술의 초점뿐이다. 숫자와 판정은 그대로다."""
+
+    def _narrate_with(self, requirement):
+        llm = FakeLLMAdapter(model="fake-local", seed="t")
+        sub = KpiCheck(KpiCheckConfig(enabled=True), Dependencies(llm=llm))
+        scoped = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
+        state = SubgraphState(
+            ctx=scoped,
+            scoped=scoped,
+            metrics=[Metric(name="수율", value=97.1, unit="%")],
+            requirement=requirement,
+        )
+        # generate_output이 traces를 이미 drain해 반환하므로, 여기서 다시
+        # drain_traces()를 부르면 빈 리스트만 남는다 — 반환값에서 읽는다.
+        result = asyncio.run(sub.generate_output(state))
+        return result["traces"][0].prompt
+
+    def test_focus_reaches_the_narration_prompt(self):
+        prompt = self._narrate_with(Requirement(query="수율", focus=["수율", "불량"]))
+        self.assertIn("수율, 불량", prompt)
+
+    def test_metrics_are_unchanged_by_focus(self):
+        prompt = self._narrate_with(Requirement(query="수율", focus=["수율"]))
+        self.assertIn("수율: 97.1%", prompt)
+
+    def test_no_requirement_leaves_prompt_unchanged(self):
+        self.assertNotIn("주목해", self._narrate_with(None))
 
 
 if __name__ == "__main__":

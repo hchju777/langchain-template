@@ -157,7 +157,9 @@ def _make_subgraph_node(name: str, compiled):
     """
 
     async def node(state: ReportState) -> dict:
-        result = await compiled.ainvoke(SubgraphState(ctx=state.ctx))
+        result = await compiled.ainvoke(
+            SubgraphState(ctx=state.ctx, requirement=state.requirement)
+        )
         out: dict = {}
         if result.get("section") is not None:
             out["sections"] = [result["section"]]
