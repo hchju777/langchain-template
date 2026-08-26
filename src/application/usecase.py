@@ -18,8 +18,27 @@ from src.application.graph.builder import build_dependencies, build_graph
 from src.application.graph.state import ReportState
 from src.config.env import EnvConfig
 from src.config.loader import DeployConfig
+from src.constants import PROJECT_ROOT
 from src.domain.models import BaseContext
 from src.infrastructure.checkpoint import thread_id_for
+
+
+def resolve_attachments(context_paths: list[str] | None) -> tuple[str, ...]:
+    """--context 경로를 절대 경로로 풀어 정렬한다.
+
+    식별자에 들어가는 목록과 실제로 읽히는 목록이 **같은 계산**에서 나와야
+    한다. 둘이 갈라지면 첨부 문서가 리포트를 바꿨는데 식별자는 정규 실행과
+    같은 상태가 되고, 그게 이 함수가 막으려는 사고다. CLI의 실행 락도 같은
+    이유로 이걸 부른다.
+
+    상대 경로 기준은 StaticReferenceAdapter와 같은 저장소 루트다. 실행
+    디렉터리에 따라 같은 인자가 다른 문서를 가리키면 안 된다.
+    """
+    resolved = [
+        str((path if path.is_absolute() else PROJECT_ROOT / path).resolve())
+        for path in (Path(raw) for raw in context_paths or [])
+    ]
+    return tuple(sorted(resolved))
 
 
 @dataclass
@@ -80,11 +99,21 @@ async def run_report(
     env = env or EnvConfig()
     cfg = DeployConfig(gbm, factory, root=config_root)
 
-    deps = build_dependencies(cfg, env, replay=replay, context_paths=context_paths)
+    # 한 번만 푼다. 아래 세 곳(문서 적재·실행 컨텍스트·thread_id)이 같은
+    # 목록을 봐야 "리포트를 바꾼 문서"와 "식별자에 든 문서"가 어긋나지 않는다.
+    attachments = resolve_attachments(context_paths)
+
+    deps = build_dependencies(cfg, env, replay=replay, context_paths=list(attachments))
     graph = build_graph(cfg, deps, env, replay=replay)
 
-    ctx = BaseContext(as_of=as_of, gbm=gbm, factory=factory, query=query)
-    thread_id = thread_id_for(gbm, factory, as_of, query)
+    ctx = BaseContext(
+        as_of=as_of,
+        gbm=gbm,
+        factory=factory,
+        query=query,
+        attachments=attachments,
+    )
+    thread_id = thread_id_for(gbm, factory, as_of, query, attachments)
     run_config = {"configurable": {"thread_id": thread_id}}
 
     try:

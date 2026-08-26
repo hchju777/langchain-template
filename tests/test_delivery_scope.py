@@ -31,9 +31,15 @@ class Spy:
         return f"{self.channel}://{key}"
 
 
-def _run(query, channels):
+def _run(query, channels, attachments=()):
     deps = Dependencies(deliveries=channels)
-    ctx = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi", query=query)
+    ctx = BaseContext(
+        as_of=AS_OF,
+        gbm="mx",
+        factory="gumi",
+        query=query,
+        attachments=tuple(attachments),
+    )
     return asyncio.run(make_deliver(deps)(ReportState(ctx=ctx, rendered="본문")))
 
 
@@ -62,6 +68,37 @@ class DeliveryScopeTest(unittest.TestCase):
         a, b = Spy("file", False), Spy("file", False)
         _run("재고만", [a])
         _run("재고만", [b])
+        self.assertEqual(a.keys, b.keys)
+
+    def test_attachment_only_run_skips_broadcast_channels(self):
+        """--query 없이 --context만 준 실행도 사람이 만든 임시 산출물이다.
+
+        재현된 사고: 첨부 문서가 내용을 바꾼 리포트가 정규 수신자에게 메일로
+        나갔다.
+        """
+        file_ch, mail_ch = Spy("file", False), Spy("mail", True)
+        out = _run(None, [file_ch, mail_ch], attachments=["/docs/plan.md"])
+        self.assertEqual([d.channel for d in out["delivered"]], ["file"])
+        self.assertEqual(mail_ch.keys, [])
+
+    def test_attachment_only_run_uses_a_distinct_idempotency_key(self):
+        """재현된 사고: 첨부 문서 실행이 정규 리포트 파일을 그대로 덮어썼다."""
+        file_ch = Spy("file", False)
+        _run(None, [file_ch], attachments=["/docs/plan.md"])
+        self.assertNotEqual(file_ch.keys[0], SCHEDULED_KEY)
+        self.assertTrue(file_ch.keys[0].startswith(f"{SCHEDULED_KEY}_q"))
+
+    def test_attachment_changes_the_key_of_a_query_run(self):
+        """같은 질의라도 붙인 문서가 다르면 다른 산출물이다."""
+        bare, attached = Spy("file", False), Spy("file", False)
+        _run("재고만", [bare])
+        _run("재고만", [attached], attachments=["/docs/plan.md"])
+        self.assertNotEqual(bare.keys, attached.keys)
+
+    def test_same_attachments_reuse_the_same_key(self):
+        a, b = Spy("file", False), Spy("file", False)
+        _run(None, [a], attachments=["/docs/a.md", "/docs/b.md"])
+        _run(None, [b], attachments=["/docs/b.md", "/docs/a.md"])
         self.assertEqual(a.keys, b.keys)
 
     def test_shipped_channels_declare_broadcast(self):

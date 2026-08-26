@@ -24,6 +24,22 @@ class BaseContext(BaseModel):
     factory: str
     #: 사람이 준 질의. 스케줄러 실행에서는 None이다.
     query: str | None = None
+    #: 실행 시 첨부한 배경 문서의 절대 경로. 같은 문서 묶음이 항상 같은
+    #: 식별자를 내도록 정렬해서 담는다. 스케줄러 실행에서는 비어 있다.
+    attachments: tuple[str, ...] = ()
+
+    @property
+    def is_ad_hoc(self) -> bool:
+        """사람이 준 입력이 하나라도 섞인 실행인가.
+
+        질의와 첨부 문서는 겉보기가 다르지만 **리포트 내용을 바꾼다**는 점이
+        같다. 질의는 어떤 분석을 돌릴지를 바꾸고, 첨부 문서는 취합 서술을
+        바꾼다. 둘 중 무엇이든 있으면 결과물이 정규 리포트와 다르므로,
+        식별자(thread_id·멱등키·실행 락)와 발송 범위를 정규 실행과 갈라야
+        한다. 질의만 따졌다가 첨부 문서 실행이 정규 리포트를 덮어쓰고
+        정규 수신자에게 나간 적이 있다.
+        """
+        return bool(self.query or self.attachments)
 
 
 class SnapshotContext(BaseContext):

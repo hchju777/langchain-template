@@ -13,7 +13,7 @@ import re
 
 from src.application.graph.state import Dependencies, ReportState
 from src.domain.models import DeliveryRecord, OverallSummary, Severity
-from src.infrastructure.checkpoint import query_digest
+from src.infrastructure.checkpoint import run_digest
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +120,10 @@ def make_deliver(deps: Dependencies):
     async def deliver(state: ReportState) -> dict:
         ctx = state.ctx
         # 멱등키. 재개하면 State와 함께 복원되므로 중복 발송을 막는다.
-        # 질의가 범위를 바꾸므로 키에도 들어가야 한다 — 빠뜨리면 임시 질의
-        # 실행이 정규 리포트 파일을 덮어쓴다.
+        # 질의와 첨부 문서가 결과물을 바꾸므로 둘 다 키에 들어가야 한다 —
+        # 빠뜨리면 임시 실행이 정규 리포트 파일을 덮어쓴다.
         key = f"{ctx.gbm}_{ctx.factory}_{ctx.as_of:%Y%m%dT%H%M}"
-        digest = query_digest(ctx.query)
+        digest = run_digest(ctx.query, ctx.attachments)
         if digest:
             key += f"_q{digest}"
         already = {d.channel for d in state.delivered}
@@ -134,9 +134,9 @@ def make_deliver(deps: Dependencies):
                 continue
             # 채널 이름을 여기서 비교하지 않는다. 나중에 Slack이 붙어도
             # 같은 규칙이 그대로 적용되어야 한다.
-            if ctx.query and getattr(channel, "broadcast", False):
+            if ctx.is_ad_hoc and getattr(channel, "broadcast", False):
                 logger.info(
-                    "channel=%s 질의 실행이라 발송을 건너뜁니다", channel.channel
+                    "channel=%s 임시 실행이라 발송을 건너뜁니다", channel.channel
                 )
                 continue
             target = await channel.deliver(key, state.rendered or "")

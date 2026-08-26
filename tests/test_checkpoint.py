@@ -19,7 +19,7 @@ from src.infrastructure.checkpoint import (
     BACKEND_NONE,
     CheckpointerUnavailableError,
     build_checkpointer,
-    query_digest,
+    run_digest,
     thread_id_for,
 )
 from src.infrastructure.llm import replay_map
@@ -217,11 +217,11 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(replay_map(first["traces"]), replay_map(restored))
 
 
-class QueryThreadIdTest(unittest.TestCase):
-    """질의가 실행 범위를 바꾸므로 as_of와 동급의 식별자여야 한다."""
+class RunThreadIdTest(unittest.TestCase):
+    """질의도 첨부 문서도 실행 결과를 바꾸므로 as_of와 동급의 식별자여야 한다."""
 
-    def test_unchanged_without_query(self):
-        """질의가 없으면 기존 문자열 그대로. 스케줄러 체크포인트가 살아있어야 한다."""
+    def test_unchanged_without_human_input(self):
+        """사람 입력이 없으면 기존 문자열 그대로. 스케줄러 체크포인트가 살아있어야 한다."""
         self.assertEqual(thread_id_for("mx", "gumi", AS_OF), "mx:gumi:20260813T0800")
 
     def test_differs_by_query(self):
@@ -236,10 +236,61 @@ class QueryThreadIdTest(unittest.TestCase):
             thread_id_for("mx", "gumi", AS_OF, "재고만"),
         )
 
-    def test_digest_empty_without_query(self):
-        self.assertEqual(query_digest(None), "")
-        self.assertEqual(query_digest(""), "")
-        self.assertEqual(len(query_digest("재고만")), 8)
+    def test_attachment_alone_forks_the_thread(self):
+        """질의 없이 문서만 붙여도 정규 실행과 다른 스레드여야 한다."""
+        scheduled = thread_id_for("mx", "gumi", AS_OF)
+        attached = thread_id_for("mx", "gumi", AS_OF, None, ("/docs/plan.md",))
+        self.assertNotEqual(attached, scheduled)
+        self.assertTrue(attached.startswith("mx:gumi:20260813T0800:q"))
+
+    def test_attachment_order_does_not_matter(self):
+        """같은 문서 묶음이면 인자 순서가 달라도 같은 스레드다."""
+        self.assertEqual(
+            thread_id_for("mx", "gumi", AS_OF, None, ("/a.md", "/b.md")),
+            thread_id_for("mx", "gumi", AS_OF, None, ("/b.md", "/a.md")),
+        )
+
+
+class RunDigestTest(unittest.TestCase):
+    """thread_id·멱등키·실행 락이 공유하는 단 하나의 해시."""
+
+    def test_empty_without_human_input(self):
+        self.assertEqual(run_digest(None), "")
+        self.assertEqual(run_digest(""), "")
+        self.assertEqual(run_digest(None, ()), "")
+        self.assertEqual(run_digest("", []), "")
+
+    def test_stable_for_the_same_input(self):
+        self.assertEqual(run_digest("재고만"), run_digest("재고만"))
+        self.assertEqual(
+            run_digest(None, ["/docs/plan.md"]), run_digest(None, ["/docs/plan.md"])
+        )
+        self.assertEqual(
+            run_digest("재고만", ["/a.md", "/b.md"]),
+            run_digest("재고만", ["/b.md", "/a.md"]),
+        )
+
+    def test_different_input_gives_a_different_digest(self):
+        self.assertNotEqual(run_digest("재고만"), run_digest("설비만"))
+        self.assertNotEqual(
+            run_digest(None, ["/a.md"]), run_digest(None, ["/b.md"])
+        )
+
+    def test_query_only_and_attachment_only_and_both_all_differ(self):
+        """세 조합이 서로 다른 실행이므로 셋 다 갈라져야 한다."""
+        query_only = run_digest("재고만")
+        attachment_only = run_digest(None, ["/docs/plan.md"])
+        both = run_digest("재고만", ["/docs/plan.md"])
+        digests = {query_only, attachment_only, both}
+        self.assertEqual(len(digests), 3)
+        self.assertTrue(all(len(d) == 8 for d in digests))
+
+    def test_separator_cannot_be_forged_from_a_path(self):
+        """경로를 이어붙인 재료가 다른 조합과 겹치면 안 된다."""
+        self.assertNotEqual(
+            run_digest(None, ["/a.md", "/b.md"]), run_digest(None, ["/a.md /b.md"])
+        )
+        self.assertNotEqual(run_digest("/a.md"), run_digest(None, ["/a.md"]))
 
 
 if __name__ == "__main__":

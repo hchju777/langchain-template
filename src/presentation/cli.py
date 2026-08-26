@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from src.application.usecase import run_report
+from src.application.usecase import resolve_attachments, run_report
 from src.config.env import EnvConfig
 from src.config.loader import DeployConfig
 from src.config.registry import (
@@ -133,9 +133,14 @@ async def _run(args) -> int:
     if replay:
         print(f"  replay: {len(replay)}건의 저장된 응답을 재생합니다")
 
-    # 중복 실행 방지. 질의가 범위를 바꾸므로 락 키에도 넣는다 — 그래야
-    # 배치가 도는 중에도 사람이 다른 질의를 던질 수 있다.
-    lock = RunLock(thread_id_for(gbm, factory, as_of, args.query), LOCK_ROOT)
+    # 중복 실행 방지. 질의와 첨부 문서가 결과물을 바꾸므로 락 키에도 넣는다 —
+    # 그래야 배치가 도는 중에도 사람이 다른 질의·다른 문서를 던질 수 있다.
+    # 경로 정규화는 유스케이스와 같은 함수를 쓴다. 여기서 따로 계산하면
+    # 락 키와 thread_id가 어긋난다.
+    attachments = resolve_attachments(args.context)
+    lock = RunLock(
+        thread_id_for(gbm, factory, as_of, args.query, attachments), LOCK_ROOT
+    )
     try:
         lock.acquire()
     except LockBusyError as exc:
