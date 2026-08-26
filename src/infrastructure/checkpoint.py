@@ -19,6 +19,7 @@ mongodb는 재시작 후 재개까지 되고, 접속 정보는 .env에서 온다
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -128,11 +129,26 @@ def build_checkpointer(
     )
 
 
-def thread_id_for(gbm: str, factory: str, as_of) -> str:
+def query_digest(query: str | None) -> str:
+    """질의를 식별자에 넣기 위한 짧은 해시. 질의가 없으면 빈 문자열.
+
+    thread_id와 발송 멱등키가 같은 값을 써야 하므로 계산은 여기 한 곳에만 둔다.
+    """
+    if not query:
+        return ""
+    return hashlib.sha256(query.encode("utf-8")).hexdigest()[:8]
+
+
+def thread_id_for(gbm: str, factory: str, as_of, query: str | None = None) -> str:
     """실행 하나를 식별하는 키.
 
-    같은 (gbm, factory, as_of)는 같은 스레드다. 그래서 중단된 실행을
-    재개할 때 무엇을 이어받을지가 자명하고, 과거 실행을 날짜로 찾아갈 수
-    있다. as_of를 밖에서 주입하기로 한 결정이 여기서도 값을 한다.
+    같은 (gbm, factory, as_of, query)는 같은 스레드다. 질의가 실행 범위를
+    바꾸므로 as_of와 동급의 식별자여야 한다 — 빠뜨리면 같은 시각에 질의만
+    다른 두 실행이 한 체크포인트를 공유해 이전 질의의 섹션이 남는다.
+
+    질의가 없으면 기존 문자열을 그대로 돌려준다. 이 변경 이전에 쌓인
+    체크포인트가 계속 유효해야 하기 때문이다.
     """
-    return f"{gbm}:{factory}:{as_of:%Y%m%dT%H%M}"
+    base = f"{gbm}:{factory}:{as_of:%Y%m%dT%H%M}"
+    digest = query_digest(query)
+    return f"{base}:q{digest}" if digest else base

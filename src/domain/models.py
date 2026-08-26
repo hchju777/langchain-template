@@ -22,6 +22,8 @@ class BaseContext(BaseModel):
     as_of: datetime
     gbm: str
     factory: str
+    #: 사람이 준 질의. 스케줄러 실행에서는 None이다.
+    query: str | None = None
 
 
 class SnapshotContext(BaseContext):

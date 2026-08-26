@@ -19,6 +19,7 @@ from src.infrastructure.checkpoint import (
     BACKEND_NONE,
     CheckpointerUnavailableError,
     build_checkpointer,
+    query_digest,
     thread_id_for,
 )
 from src.infrastructure.llm import replay_map
@@ -214,6 +215,31 @@ class ReplayTest(unittest.TestCase):
         dumped = [t.model_dump() for t in first["traces"]]
         restored = [LLMTrace(**d) for d in dumped]
         self.assertEqual(replay_map(first["traces"]), replay_map(restored))
+
+
+class QueryThreadIdTest(unittest.TestCase):
+    """질의가 실행 범위를 바꾸므로 as_of와 동급의 식별자여야 한다."""
+
+    def test_unchanged_without_query(self):
+        """질의가 없으면 기존 문자열 그대로. 스케줄러 체크포인트가 살아있어야 한다."""
+        self.assertEqual(thread_id_for("mx", "gumi", AS_OF), "mx:gumi:20260813T0800")
+
+    def test_differs_by_query(self):
+        a = thread_id_for("mx", "gumi", AS_OF, "재고만")
+        b = thread_id_for("mx", "gumi", AS_OF, "설비만")
+        self.assertNotEqual(a, b)
+        self.assertTrue(a.startswith("mx:gumi:20260813T0800:q"))
+
+    def test_stable_for_same_query(self):
+        self.assertEqual(
+            thread_id_for("mx", "gumi", AS_OF, "재고만"),
+            thread_id_for("mx", "gumi", AS_OF, "재고만"),
+        )
+
+    def test_digest_empty_without_query(self):
+        self.assertEqual(query_digest(None), "")
+        self.assertEqual(query_digest(""), "")
+        self.assertEqual(len(query_digest("재고만")), 8)
 
 
 if __name__ == "__main__":
