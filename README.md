@@ -1,4 +1,4 @@
-# langchain-template
+# langgraph-template
 
 여러 비동기 데이터 소스에서 운영 지표를 수집·분석해 md 리포트와 메일로 내보내는 **LangGraph 기반 템플릿**.
 

@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="646" viewBox="0 0 1200 646" font-family="'Noto Sans CJK KR','Noto Sans KR',sans-serif">
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker>
+  <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#5aa172"/></marker>
+  <marker id="al" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b8fd6"/></marker>
+  <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#9c8ab8"/></marker>
+  <marker id="af" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#c9a227"/></marker>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#c86b6b"/></marker>
+</defs>
+<rect width="1200" height="646" fill="#ffffff"/>
+<text x="600.0" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#1f2933">그림 1. 현재 구조</text>
+<text x="600.0" y="57" text-anchor="middle" font-size="13" font-weight="400" fill="#5c6b7a">실행 경로와 돌아가는 분석이 config로 고정되어 있다</text>
+<rect x="40" y="90" width="180" height="46" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="130.0" y="108.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">CLI</text>
+<text x="130.0" y="126.0" text-anchor="middle" font-size="11" fill="#5c6b7a">사람이 명령</text>
+<rect x="240" y="90" width="180" height="46" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="330.0" y="108.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">스케줄러</text>
+<text x="330.0" y="126.0" text-anchor="middle" font-size="11" fill="#5c6b7a">시간이 트리거</text>
+<path d="M 130 136 L 200 152" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 330 136 L 270 152" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="120" y="156" width="230" height="50" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="235.0" y="176.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">BaseContext</text>
+<text x="235.0" y="194.0" text-anchor="middle" font-size="11" fill="#5c6b7a">as_of 확정 · 밖에서 주입</text>
+<path d="M 235 206 L 235 220" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="120" y="222" width="230" height="44" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="235.0" y="239.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">RunLock</text>
+<text x="235.0" y="257.0" text-anchor="middle" font-size="11" fill="#5c6b7a">중복 실행 방지</text>
+<path d="M 235 266 L 235 280" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="160" y="282" width="150" height="42" rx="7" fill="#dde5ef" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="235.0" y="308.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">START</text>
+<rect x="452" y="96" width="268" height="310" rx="10" fill="none" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="6 4"/>
+<text x="466" y="117" font-size="12.5" font-weight="600" fill="#5c6b7a">항상 전체 실행 (config enabled)</text>
+<rect x="470" y="118" width="232" height="38" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="586.0" y="142.0" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1f2933">health.connectivity</text>
+<path d="M 310 303 L 420 303 L 420 137 L 470 137" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 702 137 L 752 137 L 752 303 L 790 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="470" y="165" width="232" height="38" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="586.0" y="189.0" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1f2933">kafka.lag</text>
+<path d="M 310 303 L 420 303 L 420 184 L 470 184" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 702 184 L 752 184 L 752 303 L 790 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="470" y="212" width="232" height="38" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="586.0" y="236.0" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1f2933">line.equipment</text>
+<path d="M 310 303 L 420 303 L 420 231 L 470 231" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 702 231 L 752 231 L 752 303 L 790 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="470" y="259" width="232" height="38" rx="7" fill="#e7edfb" stroke="#6b8fd6" stroke-width="1.5"/>
+<text x="586.0" y="283.0" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1f2933">kpi.check</text>
+<path d="M 310 303 L 420 303 L 420 278 L 470 278" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 702 278 L 752 278 L 752 303 L 790 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="470" y="306" width="232" height="38" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="586.0" y="330.0" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1f2933">alarm.trend</text>
+<path d="M 310 303 L 420 303 L 420 325 L 470 325" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 702 325 L 752 325 L 752 303 L 790 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="470" y="353" width="232" height="38" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="586.0" y="377.0" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1f2933">material.stock</text>
+<path d="M 310 303 L 420 303 L 420 372 L 470 372" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 702 372 L 752 372 L 752 303 L 790 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="790" y="278" width="130" height="50" rx="7" fill="#e7edfb" stroke="#6b8fd6" stroke-width="1.5"/>
+<text x="855.0" y="298.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">aggregate</text>
+<text x="855.0" y="316.0" text-anchor="middle" font-size="10.5" fill="#5c6b7a">코드 집계 + LLM 서술</text>
+<path d="M 920 303 L 946 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="946" y="278" width="110" height="50" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="1001.0" y="298.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">render</text>
+<text x="1001.0" y="316.0" text-anchor="middle" font-size="11" fill="#5c6b7a">md 생성</text>
+<path d="M 1056 303 L 1082 303" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="1082" y="278" width="100" height="50" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="1132.0" y="298.0" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2933">deliver</text>
+<text x="1132.0" y="316.0" text-anchor="middle" font-size="11" fill="#5c6b7a">멱등키</text>
+<rect x="40" y="424" width="380" height="160" rx="10" fill="none" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="6 4"/>
+<text x="54" y="445" font-size="12.5" font-weight="600" fill="#5c6b7a">서브그래프 내부 — 4슬롯 (공통)</text>
+<rect x="56" y="452" width="104" height="40" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="108.0" y="477.0" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2933">validate</text>
+<path d="M 160 472 L 180 472" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="180" y="452" width="104" height="40" rx="7" fill="#dde5ef" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="232.0" y="477.0" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2933">process</text>
+<path d="M 284 472 L 304 472" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="304" y="452" width="100" height="40" rx="7" fill="#eef2f7" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="354.0" y="477.0" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2933">output</text>
+<path d="M 108 492 L 108 524 L 228 524" fill="none" stroke="#c86b6b" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M 232 492 L 232 524" fill="none" stroke="#c86b6b" stroke-width="1.6"/>
+<path d="M 354 492 L 354 524 L 256 524" fill="none" stroke="#c86b6b" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="176" y="528" width="130" height="34" rx="7" fill="#fdeaea" stroke="#c86b6b" stroke-width="1.5"/>
+<text x="241.0" y="550.0" text-anchor="middle" font-size="12" font-weight="600" fill="#1f2933">handle_error</text>
+<text x="318" y="550" text-anchor="start" font-size="11.5" font-weight="400" fill="#c86b6b">부분 실패 격리</text>
+<rect x="440" y="424" width="742" height="160" rx="10" fill="none" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="6 4"/>
+<text x="454" y="445" font-size="12.5" font-weight="600" fill="#5c6b7a">코드가 고정하는 세 가지</text>
+<rect x="460" y="450" width="212" height="46" rx="7" fill="#f3f0f7" stroke="#9c8ab8" stroke-width="1.5"/>
+<text x="566.0" y="468.0" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2933">데이터 조회 경로</text>
+<text x="566.0" y="486.0" text-anchor="middle" font-size="10.5" fill="#5c6b7a">kind → 어댑터 (config ports)</text>
+<rect x="692" y="450" width="202" height="46" rx="7" fill="#f3f0f7" stroke="#9c8ab8" stroke-width="1.5"/>
+<text x="793.0" y="468.0" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2933">숫자 계산</text>
+<text x="793.0" y="486.0" text-anchor="middle" font-size="10.5" fill="#5c6b7a">Metric 값은 코드가 산출</text>
+<rect x="914" y="450" width="250" height="46" rx="7" fill="#fdeaea" stroke="#c86b6b" stroke-width="1.5"/>
+<text x="1039.0" y="468.0" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2933">근거 대조 (가드레일)</text>
+<text x="1039.0" y="486.0" text-anchor="middle" font-size="10.5" fill="#5c6b7a">evidence ID 전수 검사</text>
+<text x="460" y="526" text-anchor="start" font-size="12.3" font-weight="400" fill="#5c6b7a">판정 자체는 이미 코드(임계치)와 LLM(judge)이 함께 담당한다. 위 세 가지만 코드 전용이다.</text>
+<text x="460" y="552" text-anchor="start" font-size="12.3" font-weight="400" fill="#b45309">한계 — 질의를 받을 입구가 없고, 돌아가는 분석이 고정이며, process 안에서 분기할 수 없다.</text>
+<rect x="40" y="606" width="16" height="13" rx="3" fill="#e7edfb" stroke="#6b8fd6" stroke-width="1.4"/>
+<text x="63" y="617" text-anchor="start" font-size="12" font-weight="400" fill="#5c6b7a">LLM 사용</text>
+<rect x="200" y="606" width="16" height="13" rx="3" fill="#fdeaea" stroke="#c86b6b" stroke-width="1.4"/>
+<text x="223" y="617" text-anchor="start" font-size="12" font-weight="400" fill="#5c6b7a">가드레일</text>
+<rect x="360" y="606" width="16" height="13" rx="3" fill="#f3f0f7" stroke="#9c8ab8" stroke-width="1.4"/>
+<text x="383" y="617" text-anchor="start" font-size="12" font-weight="400" fill="#5c6b7a">코드 전용</text>
+</svg>

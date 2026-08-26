@@ -5,3 +5,8 @@ __pycache__/
 output/
 .locks/
 .vscode/
+
+# 문서 배포 산출물 — docs/superpowers/tools/build_dist.py로 다시 만든다
+docs/superpowers/specs/*.html
+docs/superpowers/specs/*.pdf
+docs/superpowers/specs/*.embedded.md
