@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.application.decorators import with_cache, with_error_handling, with_timing
 from src.application.graph.aggregate import make_aggregate, make_deliver, make_render
+from src.application.graph.analyze import ANALYZE_NODE, make_analyze_query
 from src.application.graph.state import Dependencies, ReportState
 from src.application.subgraphs.base import SubgraphState
 from src.config.env import EnvConfig
@@ -245,8 +246,19 @@ def build_graph(
         node = with_cache(node, name, parsed[name].cache_ttl)
         node = with_timing(node, name)
         graph.add_node(name, node)
-        graph.add_edge(START, name)          # fan-out: LangGraph가 병렬 실행
         graph.add_edge(name, "aggregate")    # 전부 끝나야 도는 자연스러운 barrier
+
+    # 질의 분석이 fan-out 앞에 선다. 질의가 없으면 LLM을 부르지 않으므로
+    # 스케줄러 경로의 비용과 지연은 그대로다.
+    titles = {name: (get_subgraph(name).title or name) for name in active}
+    graph.add_node(
+        ANALYZE_NODE,
+        with_timing(make_analyze_query(deps, active, titles), ANALYZE_NODE),
+    )
+    graph.add_edge(START, ANALYZE_NODE)
+    # 목적지 목록을 반환하면 LangGraph가 그만큼 병렬로 띄운다. 스케줄되지
+    # 않은 노드는 aggregate의 barrier를 막지 않는다.
+    graph.add_conditional_edges(ANALYZE_NODE, _route_selected(active), active)
 
     graph.add_node("aggregate", with_timing(
         with_error_handling(make_aggregate(deps), "aggregate"), "aggregate"))
@@ -277,3 +289,16 @@ def _slot_attr(slot: str) -> str:
     if slot not in _SLOT_ATTR:
         raise KeyError(f"알 수 없는 슬롯 '{slot}'. 가능: {list(_SLOT_ATTR)}")
     return _SLOT_ATTR[slot]
+
+
+def _route_selected(active: list[str]):
+    """State만 보는 순수 함수. LLM 호출은 analyze_query에서 이미 끝났다.
+
+    라우팅 결정이 State에 남아 있으므로 체크포인트로 추적할 수 있다.
+    """
+
+    def route(state: ReportState) -> list[str]:
+        req = state.requirement
+        return list(req.selected) if req and req.selected else list(active)
+
+    return route
