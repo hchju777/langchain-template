@@ -815,8 +815,9 @@ class NarrationFocusTest(unittest.TestCase):
             metrics=[Metric(name="수율", value=97.1, unit="%")],
             requirement=requirement,
         )
-        asyncio.run(sub.generate_output(state))
-        return llm.drain_traces()[0].prompt
+        # generate_output이 이미 drain_traces()로 어댑터를 비우므로, 여기서
+        # 다시 부르면 빈 목록이 온다. 반환값에서 꺼내야 한다.
+        return asyncio.run(sub.generate_output(state))["traces"][0].prompt
 
     def test_focus_reaches_the_narration_prompt(self):
         prompt = self._narrate_with(Requirement(query="수율", focus=["수율", "불량"]))
