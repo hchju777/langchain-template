@@ -14,6 +14,7 @@ from src.domain.models import (
     LLMTrace,
     OverallSummary,
     ReportSection,
+    Requirement,
     SubgraphError,
 )
 from src.domain.reducers import merge_sections
@@ -26,6 +27,8 @@ class ReportState(BaseModel):
     traces: Annotated[list[LLMTrace], operator.add] = Field(default_factory=list)
     #: 근거 검증에서 폐기된 판정. 서브그래프마다 LLM이 다를 수 있어 State로 모은다.
     guardrail_drops: Annotated[list[str], operator.add] = Field(default_factory=list)
+    #: 질의 분석 결과. analyze_query가 한 번만 쓰므로 리듀서가 없다.
+    requirement: Requirement | None = None
     overall: OverallSummary | None = None
     rendered: str | None = None
     delivered: Annotated[list[DeliveryRecord], operator.add] = Field(default_factory=list)

@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from src.constants import QUERY_PROMPT_MARKER
 from src.domain.models import Judgement, LLMTrace, Requirement, Severity
 
 #: config의 llm.adapter 값
@@ -238,12 +239,17 @@ class FakeLLMAdapter(BaseLLMAdapter):
         return out
 
     async def _plan_raw(self, prompt: str, allowed: list[str]) -> Requirement:
-        """프롬프트에 이름이 언급된 분석을 고른다.
+        """질의에 이름이 언급된 분석을 고른다.
 
-        _judge_raw와 마찬가지로 **일부러 없는 이름을 하나 섞는다.** 가드레일이
-        실제로 동작하는지 LLM 없이 확인할 수 있어야 하기 때문이다.
+        프롬프트에는 고를 수 있는 분석 목록이 함께 실려 있으므로 **질의
+        부분만** 본다. 목록까지 보면 모든 이름이 매칭되어 아무것도 좁혀지지
+        않는다.
+
+        _judge_raw와 마찬가지로 일부러 없는 이름을 하나 섞는다. 가드레일이
+        실제로 도는지 LLM 없이 확인할 수 있어야 하기 때문이다.
         """
-        hits = [n for n in allowed if n in prompt or n.split(".")[-1] in prompt]
+        query = prompt.rsplit(QUERY_PROMPT_MARKER, 1)[-1]
+        hits = [n for n in allowed if n in query or n.split(".")[-1] in query]
         picked = hits or allowed[:1]
         return Requirement(
             focus=[n.split(".")[-1] for n in picked],

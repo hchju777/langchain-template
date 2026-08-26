@@ -42,3 +42,6 @@ DEFAULT_BACKOFF_BASE_SEC = 0.2
 
 # 리포트
 DEFAULT_REPORT_TEMPLATE = "report.md"
+#: 질의 분석 프롬프트에서 질의 본문이 시작되는 표시.
+#: Fake 어댑터가 분석 목록이 아니라 질의만 보고 판단하려면 경계가 필요하다.
+QUERY_PROMPT_MARKER = "질의: "

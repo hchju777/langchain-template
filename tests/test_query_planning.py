@@ -9,8 +9,11 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from src.domain.models import Requirement
+from src.application.graph.analyze import make_analyze_query
+from src.application.graph.state import Dependencies, ReportState
+from src.domain.models import BaseContext, Requirement
 from src.infrastructure.llm import FakeLLMAdapter
+from tests.helpers import AS_OF
 
 ALLOWED = ["material.stock", "kpi.check", "line.equipment"]
 
@@ -55,3 +58,57 @@ class SelectionGuardrailTest(unittest.TestCase):
         self.assertEqual(req.query, "")
         self.assertEqual(req.selected, [])
         self.assertFalse(req.is_full_scope)
+
+
+TITLES = {"material.stock": "자재 소진 예상", "kpi.check": "KPI 점검",
+          "line.equipment": "라인별 장비 상태"}
+
+
+def run_node(query, llm=None):
+    deps = Dependencies(llm=llm or FakeLLMAdapter(model="fake-local", seed="test"))
+    node = make_analyze_query(deps, ALLOWED, TITLES)
+    ctx = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi", query=query)
+    return asyncio.run(node(ReportState(ctx=ctx)))
+
+
+class AnalyzeQueryNodeTest(unittest.TestCase):
+    def test_no_query_selects_everything_without_calling_llm(self):
+        """스케줄러 경로. LLM을 부르지 않아야 비용도 지연도 늘지 않는다."""
+        out = run_node(None)
+        req = out["requirement"]
+        self.assertEqual(req.selected, ALLOWED)
+        self.assertTrue(req.is_full_scope)
+        self.assertFalse(out.get("traces"))
+
+    def test_query_narrows_selection(self):
+        out = run_node("stock 상황을 알려줘")
+        req = out["requirement"]
+        self.assertEqual(req.selected, ["material.stock"])
+        self.assertEqual(req.query, "stock 상황을 알려줘")
+        self.assertFalse(req.is_full_scope)
+
+    def test_prompt_carries_titles(self):
+        """등록명만으로는 LLM이 무슨 분석인지 알 수 없다."""
+        out = run_node("stock 상황을 알려줘")
+        self.assertTrue(out["traces"], "질의가 있으면 trace가 남아야 한다")
+        self.assertIn("자재 소진 예상", out["traces"][0].prompt)
+
+    def test_llm_failure_falls_back_to_full_scope(self):
+        class Boom(FakeLLMAdapter):
+            async def _plan_raw(self, prompt, allowed):
+                raise RuntimeError("모델 응답 없음")
+
+        out = run_node("stock 상황", llm=Boom(model="fake-local"))
+        req = out["requirement"]
+        self.assertEqual(req.selected, ALLOWED)
+        self.assertTrue(req.is_full_scope)
+        self.assertTrue(any("RuntimeError" in d for d in out["guardrail_drops"]))
+
+    def test_empty_selection_falls_back_to_full_scope(self):
+        class Empty(FakeLLMAdapter):
+            async def _plan_raw(self, prompt, allowed):
+                return Requirement(selected=["nonexistent.only"])
+
+        out = run_node("무관한 질의", llm=Empty(model="fake-local"))
+        self.assertEqual(out["requirement"].selected, ALLOWED)
+        self.assertTrue(out["requirement"].is_full_scope)
