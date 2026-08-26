@@ -172,8 +172,17 @@ resumes exactly as it did."
 **Files:**
 - Modify: `src/domain/models.py` (`Requirement` 추가)
 - Modify: `src/domain/ports.py:65-76` (`LLMPort`)
+- Modify: `src/constants.py` (`QUERY_PROMPT_MARKER`)
 - Modify: `src/infrastructure/llm.py` (`plan`, `_plan_raw`, `_enforce_selection`)
 - Test: `tests/test_query_planning.py` (신규)
+
+**먼저 `src/constants.py`의 "리포트" 절 끝에 표시를 하나 둔다.** Fake 어댑터가 프롬프트에서 질의 부분만 골라 보려면 경계가 필요하고, 그 경계를 프롬프트 생성 쪽(Task 3)과 Fake 쪽이 각자 문자열로 들고 있으면 조용히 어긋난다.
+
+```python
+#: 질의 분석 프롬프트에서 질의 본문이 시작되는 표시.
+#: Fake 어댑터가 분석 목록이 아니라 질의만 보고 판단하려면 경계가 필요하다.
+QUERY_PROMPT_MARKER = "질의: "
+```
 
 **Interfaces:**
 - Consumes: 없음 (Task 1과 독립)
@@ -331,12 +340,19 @@ class Requirement(BaseModel):
 
 ```python
     async def _plan_raw(self, prompt: str, allowed: list[str]) -> Requirement:
-        """프롬프트에 이름이 언급된 분석을 고른다.
+        """질의에 이름이 언급된 분석을 고른다.
+
+        프롬프트에는 고를 수 있는 분석 목록이 함께 실려 있으므로 **질의
+        부분만** 본다. 목록까지 보면 모든 이름이 매칭되어 아무것도 좁혀지지
+        않는다.
 
         _judge_raw와 마찬가지로 **일부러 없는 이름을 하나 섞는다.** 가드레일이
         실제로 동작하는지 LLM 없이 확인할 수 있어야 하기 때문이다.
         """
-        hits = [n for n in allowed if n in prompt or n.split(".")[-1] in prompt]
+        # 표시가 없으면 rsplit이 전체 문자열을 돌려주므로, 프롬프트를 직접
+        # 넘기는 호출(테스트 등)도 그대로 동작한다.
+        query = prompt.rsplit(QUERY_PROMPT_MARKER, 1)[-1]
+        hits = [n for n in allowed if n in query or n.split(".")[-1] in query]
         picked = hits or allowed[:1]
         return Requirement(
             focus=[n.split(".")[-1] for n in picked],
@@ -527,7 +543,8 @@ def _prompt(query: str, active: list[str], titles: dict[str, str]) -> str:
         f"{listing}\n\n"
         "사용자 질의에 답하는 데 필요한 분석만 selected에 고르고, 서술에서 "
         "강조할 키워드를 focus에 넣으세요. 목록에 없는 이름은 쓰지 마세요.\n\n"
-        f"질의: {query}"
+        # 표시는 constants에서 온다. Fake 어댑터가 이 경계로 질의만 잘라 본다.
+        f"{QUERY_PROMPT_MARKER}{query}"
     )
 
 
