@@ -19,9 +19,34 @@ logger = logging.getLogger(__name__)
 
 AGGREGATE_NODE = "aggregate"
 
-#: 대괄호 인용. 소문자·숫자로 시작하는 토큰만 본다. 한글 대괄호 강조와
-#: 섞이지 않게 하려는 것이다 (예: "[심각]"은 인용이 아니다).
-_CITE = re.compile(r"\[([a-z0-9][\w.\-]*)\]")
+#: 인용 후보가 될 대괄호. 안에 무엇이 들었는지는 아래에서 토큰별로 따진다.
+#: 한 괄호에 여러 id를 몰아 쓰는("[sop-99, sop-98]") 실제 출력이 통째로
+#: 검사를 빠져나가던 구멍을 막기 위한 것이다.
+_BRACKET = re.compile(r"\[([^\[\]]+)\]")
+
+#: 괄호 안 id 구분자. 쉼표든 공백이든 나눠서 하나씩 본다.
+_ID_SEP = re.compile(r"[,\s]+")
+
+#: 인용으로 볼 토큰. 영숫자로 시작하는 **ASCII**만 본다. 대소문자를 모두
+#: 받는 이유는 "[SOP-99]"가 그냥 통과하던 구멍 때문이고, ASCII로 좁히는
+#: 이유는 "[심각]"·"[A라인]" 같은 한글 대괄호 강조를 인용으로 오인하지
+#: 않기 위해서다. 실제 id(sop-01, attach-01, kpi.check)는 전부 ASCII다.
+_CITE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-]*")
+
+
+def _cited_ids(text: str) -> list[str]:
+    """서술이 인용한 것으로 보이는 id 전부.
+
+    괄호 안 토큰이 **하나라도** id 모양이 아니면 그 괄호는 인용이 아니라
+    한글 강조로 본다. 그래야 "[심각] 설비 — ..." 같은 문장이 인용 검사에
+    끌려 들어오지 않는다.
+    """
+    found: list[str] = []
+    for inner in _BRACKET.findall(text):
+        tokens = [t for t in _ID_SEP.split(inner.strip()) if t]
+        if tokens and all(_CITE_TOKEN.fullmatch(t) for t in tokens):
+            found.extend(tokens)
+    return found
 
 
 def _unknown_citations(text: str, allowed: set[str]) -> list[str]:
@@ -30,7 +55,7 @@ def _unknown_citations(text: str, allowed: set[str]) -> list[str]:
     aggregate는 narrate()를 쓰므로 judge()의 근거 강제가 걸리지 않는다.
     그래서 사후에 대조한다. LLM 없이 도는 결정론적 검사라 항상 켠다.
     """
-    return sorted({m for m in _CITE.findall(text) if m not in allowed})
+    return sorted({m for m in _cited_ids(text) if m not in allowed})
 
 
 def make_aggregate(deps: Dependencies):
@@ -55,8 +80,11 @@ def make_aggregate(deps: Dependencies):
             + (" (부분 실패)" if s.degraded else "")
             for s in state.sections
         )
-        docs = await deps.references.load(state.ctx, state.requirement) \
-            if deps.references is not None else []
+        # 평범한 if로 둔다. 줄 이어쓰기 조건식이면 나중에 한 줄을 손대다가
+        # 단락 평가가 깨져 references 없이 도는 조립에서 AttributeError가 난다.
+        docs = []
+        if deps.references is not None:
+            docs = await deps.references.load(state.ctx, state.requirement)
 
         prompt = (
             "아래는 각 분석의 판정 결과입니다. 심각 "

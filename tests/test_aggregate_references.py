@@ -75,6 +75,33 @@ class CitationCheckTest(unittest.TestCase):
         self.assertEqual(_unknown_citations("[kpi.check] 와 [sop-01] 참고", allowed), [])
         self.assertEqual(_unknown_citations("[sop-09] 에 따르면", allowed), ["sop-09"])
 
+    def test_uppercase_leading_id_is_inspected(self):
+        """"[SOP-99]"가 조용히 통과하면 결정론적이라던 검사가 거짓말이 된다."""
+        self.assertEqual(
+            _unknown_citations("[SOP-99] 에 따르면", {"sop-01"}), ["SOP-99"]
+        )
+        self.assertEqual(_unknown_citations("[SOP-01] 참고", {"SOP-01"}), [])
+
+    def test_multiple_ids_in_one_bracket_are_inspected_individually(self):
+        """한 괄호에 몰아 쓴 id 목록이 통째로 빠져나가면 안 된다."""
+        self.assertEqual(
+            _unknown_citations("[sop-99, sop-98] 참고", {"sop-01"}),
+            ["sop-98", "sop-99"],
+        )
+        self.assertEqual(
+            _unknown_citations("[sop-01, sop-99] 참고", {"sop-01"}), ["sop-99"]
+        )
+        self.assertEqual(
+            _unknown_citations("[sop-01 sop-02] 참고", {"sop-01", "sop-02"}), []
+        )
+
+    def test_korean_bracket_labels_are_not_citations(self):
+        """top_issues의 "[심각]" 같은 강조가 인용 검사에 끌려오면 안 된다."""
+        for label in ("[심각]", "[경고]", "[정상]", "[A라인] 점검", "[심각] 수율 미달"):
+            self.assertEqual(
+                _unknown_citations(label, set()), [], f"{label}은 인용이 아니다"
+            )
+
     def test_unknown_citation_is_recorded_as_guardrail_drop(self):
         out = _run(llm=_citing("[sop-99] 에 따르면 조치가 필요합니다."))
         self.assertTrue(any("sop-99" in d for d in out["guardrail_drops"]))

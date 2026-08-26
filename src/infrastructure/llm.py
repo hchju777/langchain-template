@@ -6,8 +6,9 @@
     ChatModelAdapter 실제 LLM. ★ 외부와 통신하는 유일한 지점.
 
 공통 로직(프롬프트 기록, replay, 환각 가드레일)은 BaseLLMAdapter에 있고,
-하위 클래스는 **_complete()와 _judge_raw() 둘만** 구현한다. 그래서 "실제
-LLM과 붙는 코드가 어디냐"는 질문의 답이 ChatModelAdapter의 그 두 메서드다.
+하위 클래스는 **_complete(), _judge_raw(), _plan_raw() 셋만** 구현한다.
+그래서 "실제 LLM과 붙는 코드가 어디냐"는 질문의 답이 ChatModelAdapter의
+그 세 메서드다.
 """
 
 from __future__ import annotations

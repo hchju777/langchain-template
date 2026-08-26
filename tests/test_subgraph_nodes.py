@@ -15,7 +15,14 @@ from src.application.subgraphs.kafka.lag import KafkaLag, KafkaLagConfig
 from src.application.subgraphs.kpi.check import KpiCheck, KpiCheckConfig
 from src.application.subgraphs.material.stock import MaterialStock, MaterialStockConfig
 from src.application.subgraphs.material.stock_gumi import GumiMaterialStock
-from src.domain.models import Metric, Record, Requirement, Severity, SnapshotContext
+from src.domain.models import (
+    Metric,
+    Record,
+    Requirement,
+    Severity,
+    SnapshotContext,
+    SubgraphError,
+)
 from src.infrastructure.llm import FakeLLMAdapter
 from tests.helpers import AS_OF
 
@@ -204,6 +211,43 @@ class NarrationFocusTest(unittest.TestCase):
 
     def test_no_requirement_leaves_prompt_unchanged(self):
         self.assertNotIn("주목해", self._narrate_with(None))
+
+
+class HandleErrorDrainTest(unittest.TestCase):
+    """실패 경로도 어댑터를 비워야 한다.
+
+    서브그래프가 config override로 자기 LLM 어댑터를 가지면 여기 말고는
+    비우는 곳이 없다. 안 비우면 실패 직전까지 쌓인 trace와 잡아낸 환각이
+    영영 갇힌다 — 무엇이 잘못됐는지 가장 알고 싶은 순간에.
+    """
+
+    def _errored(self):
+        llm = FakeLLMAdapter(model="fake-local", seed="t")
+        sub = KpiCheck(KpiCheckConfig(enabled=True), FakeDeps(llm=llm))
+        run(llm.narrate("kpi.check", "실패 직전에 부른 프롬프트"))
+        llm.guardrail_drops.append("kpi.check: 근거 없는 판정을 버렸습니다")
+        state = SubgraphState(
+            ctx=CTX,
+            scoped=CTX,
+            error=SubgraphError(key="kpi.check", slot="process", message="boom"),
+        )
+        return llm, run(sub.handle_error(state))
+
+    def test_traces_survive_the_failure(self):
+        llm, out = self._errored()
+        self.assertEqual(len(out["traces"]), 1)
+        self.assertIn("실패 직전에 부른 프롬프트", out["traces"][0].prompt)
+        self.assertEqual(llm.drain_traces(), [], "어댑터에 남은 게 없어야 한다")
+
+    def test_guardrail_drops_survive_the_failure(self):
+        llm, out = self._errored()
+        self.assertEqual(out["guardrail_drops"], ["kpi.check: 근거 없는 판정을 버렸습니다"])
+        self.assertEqual(llm.drain_guardrail_drops(), [])
+
+    def test_section_is_still_degraded(self):
+        _, out = self._errored()
+        self.assertTrue(out["section"].degraded)
+        self.assertEqual(out["section"].severity, Severity.WARNING)
 
 
 if __name__ == "__main__":

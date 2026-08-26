@@ -126,6 +126,10 @@ class BaseSubgraph:
         여기서 한다. config는 읽기 쉽고, 실행은 절대 시각으로 고정된다.
         """
         ctx = state.ctx
+        # scoped에 ctx.query를 **일부러** 옮기지 않는다. scoped는 아래로
+        # 내려가 fetch 필터가 되는데, 질의가 거기 닿으면 사람이 던진 문장이
+        # 수집되는 값 자체를 바꿀 수 있다. 질의를 구조적으로 빼두는 것이
+        # "질의는 서술의 초점만 바꾼다"는 규약을 코드로 보증하는 방법이다.
         if issubclass(self.context_type, HistoricalContext):
             if self.config.window is None:
                 raise ValueError(
@@ -200,7 +204,15 @@ class BaseSubgraph:
             ),
             degraded=True,
         )
-        return {"section": section}
+        # 실패 경로에서도 어댑터를 비운다. 서브그래프가 config override로
+        # 자기 LLM 어댑터를 가지면 여기 말고는 비울 곳이 없어, 실패 직전까지
+        # 쌓인 trace와 가드레일 기록이 영영 갇힌다 — 하필 무엇이 잘못됐는지
+        # 가장 알고 싶은 순간에. --replay에 필요한 것도 그 trace다.
+        return {
+            "section": section,
+            "traces": self.deps.llm.drain_traces(),
+            "guardrail_drops": self.deps.llm.drain_guardrail_drops(),
+        }
 
     # ------------------------------------------------------------------
     # 조립
