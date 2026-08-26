@@ -22,6 +22,24 @@ class BaseContext(BaseModel):
     as_of: datetime
     gbm: str
     factory: str
+    #: 사람이 준 질의. 스케줄러 실행에서는 None이다.
+    query: str | None = None
+    #: 실행 시 첨부한 배경 문서의 절대 경로. 같은 문서 묶음이 항상 같은
+    #: 식별자를 내도록 정렬해서 담는다. 스케줄러 실행에서는 비어 있다.
+    attachments: tuple[str, ...] = ()
+
+    @property
+    def is_ad_hoc(self) -> bool:
+        """사람이 준 입력이 하나라도 섞인 실행인가.
+
+        질의와 첨부 문서는 겉보기가 다르지만 **리포트 내용을 바꾼다**는 점이
+        같다. 질의는 어떤 분석을 돌릴지를 바꾸고, 첨부 문서는 취합 서술을
+        바꾼다. 둘 중 무엇이든 있으면 결과물이 정규 리포트와 다르므로,
+        식별자(thread_id·멱등키·실행 락)와 발송 범위를 정규 실행과 갈라야
+        한다. 질의만 따졌다가 첨부 문서 실행이 정규 리포트를 덮어쓰고
+        정규 수신자에게 나간 적이 있다.
+        """
+        return bool(self.query or self.attachments)
 
 
 class SnapshotContext(BaseContext):
@@ -65,6 +83,43 @@ class FetchSpec(BaseModel):
 
     kind: str
     filters: dict[str, Any] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------
+# 질의
+# --------------------------------------------------------------------------
+class Requirement(BaseModel):
+    """질의를 구조화한 결과. 무엇을 볼지와 어디에 초점을 둘지를 담는다.
+
+    selected는 가드레일을 통과한 이름만 남는다. 원본에 없는 이름이 있었다면
+    dropped에 남으므로, 리포트를 보고 LLM이 무엇을 지어냈는지 역추적할 수 있다.
+    """
+
+    query: str = ""
+    #: 서술 초점에 쓰는 관심 키워드
+    focus: list[str] = Field(default_factory=list)
+    #: 실행할 서브그래프 등록명
+    selected: list[str] = Field(default_factory=list)
+    rationale: str = ""
+    #: 가드레일이 버린 이름
+    dropped: list[str] = Field(default_factory=list)
+    #: 질의가 없거나 분석에 실패해 전체를 선택한 경우
+    is_full_scope: bool = False
+
+
+class ReferenceDoc(BaseModel):
+    """취합 단계가 참고하는 배경 문서.
+
+    id를 두는 이유는 Record와 같다 — 서술이 이 문서를 인용하면 그 인용을
+    코드로 대조할 수 있다. Record와 별도 타입인 이유는 성격이 다르기
+    때문이다. Record는 as_of 시점의 관측값이고, 이쪽은 시점과 무관한
+    배경 지식이다.
+    """
+
+    id: str
+    source: str
+    title: str
+    content: str
 
 
 # --------------------------------------------------------------------------

@@ -65,6 +65,11 @@ class DeployConfig:
         self.layer_files: dict[str, Path] = {}
         self.data = self._load_merged()
 
+    @property
+    def root(self) -> Path:
+        """이 설정을 읽어온 config 디렉터리. 진단과 테스트가 쓴다."""
+        return self._root
+
     def _layer_paths(self) -> list[tuple[str, Path]]:
         return [
             (CONFIG_LAYER_GBM, self._root / "gbm" / f"{self.gbm}.json"),

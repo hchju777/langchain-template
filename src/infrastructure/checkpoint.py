@@ -19,6 +19,8 @@ mongodb는 재시작 후 재개까지 되고, 접속 정보는 .env에서 온다
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Sequence
 from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -128,11 +130,46 @@ def build_checkpointer(
     )
 
 
-def thread_id_for(gbm: str, factory: str, as_of) -> str:
+#: 해시 재료를 잇는 구분자. 경로에도 질의에도 나타날 수 없는 제어문자라
+#: 서로 다른 입력 조합이 같은 재료 문자열로 뭉개지지 않는다.
+_DIGEST_SEP = "\x1f"
+
+
+def run_digest(query: str | None, attachments: Sequence[str] = ()) -> str:
+    """사람이 준 입력을 식별자에 넣기 위한 짧은 해시. 입력이 없으면 빈 문자열.
+
+    thread_id·발송 멱등키·실행 락이 **모두 같은 값**을 써야 하므로 계산은
+    여기 한 곳에만 둔다. 구현이 두 벌이 되면 세 식별자가 서서히 어긋나는데,
+    질의만 세던 시절에 첨부 문서 실행이 정규 리포트를 덮어쓴 사고가 정확히
+    그 모양이었다.
+
+    질의만 있을 때의 결과는 예전 계산과 같다 — 이 변경 이전에 쌓인 질의
+    실행 체크포인트가 계속 유효해야 하기 때문이다.
+    """
+    paths = sorted(attachments or ())
+    if not query and not paths:
+        return ""
+    material = _DIGEST_SEP.join([query or "", *paths])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+
+
+def thread_id_for(
+    gbm: str,
+    factory: str,
+    as_of,
+    query: str | None = None,
+    attachments: Sequence[str] = (),
+) -> str:
     """실행 하나를 식별하는 키.
 
-    같은 (gbm, factory, as_of)는 같은 스레드다. 그래서 중단된 실행을
-    재개할 때 무엇을 이어받을지가 자명하고, 과거 실행을 날짜로 찾아갈 수
-    있다. as_of를 밖에서 주입하기로 한 결정이 여기서도 값을 한다.
+    같은 (gbm, factory, as_of, query, attachments)는 같은 스레드다. 질의도
+    첨부 문서도 실행 결과를 바꾸므로 as_of와 동급의 식별자여야 한다 —
+    빠뜨리면 같은 시각의 두 실행이 한 체크포인트를 공유해 이전 실행의
+    섹션과 발송 기록이 남는다.
+
+    사람이 준 입력이 없으면 기존 문자열을 그대로 돌려준다. 이 변경 이전에
+    쌓인 스케줄러 체크포인트가 계속 유효해야 하기 때문이다.
     """
-    return f"{gbm}:{factory}:{as_of:%Y%m%dT%H%M}"
+    base = f"{gbm}:{factory}:{as_of:%Y%m%dT%H%M}"
+    digest = run_digest(query, attachments)
+    return f"{base}:q{digest}" if digest else base

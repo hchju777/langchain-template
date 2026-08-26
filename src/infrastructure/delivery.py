@@ -23,6 +23,8 @@ class FileDelivery:
     """md 파일로 저장."""
 
     channel = "file"
+    #: 정해진 수신자에게 밀어내는 채널이 아니다. 질의 실행에서도 남긴다.
+    broadcast = False
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or OUTPUT_ROOT
@@ -38,6 +40,8 @@ class MailDelivery:
     """메일 발송. 실제 SMTP 호출은 주석 처리했다."""
 
     channel = "mail"
+    #: 정규 수신자 전원에게 나간다. 사람이 임시로 던진 질의 결과는 보내지 않는다.
+    broadcast = True
 
     def __init__(self, recipients: list[str], subject_prefix: str = "[운영리포트]") -> None:
         self.recipients = recipients

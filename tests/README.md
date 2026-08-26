@@ -54,5 +54,6 @@ out = asyncio.run(sub.process(SubgraphState(ctx=CTX, scoped=CTX)))
 
 ## 아직 없는 것
 
-- **어댑터 테스트** — 의도적으로 뺐습니다. 이유와 대가는 [설계 문서 §11](../docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md)에 있습니다
+- **어댑터 테스트** — 의도적으로 뺐습니다. 이유와 대가는 [설계 문서 §11](../docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md)에 있습니다.
+  예외는 [test_references.py](test_references.py) 하나입니다 — `StaticReferenceAdapter`는 외부 의존 없이 로컬 파일만 읽고, "경로가 틀리면 부팅에서 멈춘다"가 그 어댑터의 핵심 동작이라 검증합니다
 - CLI 인자 파싱, 발송 채널 실제 I/O

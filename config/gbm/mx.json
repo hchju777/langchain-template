@@ -68,7 +68,8 @@
     }
   },
   "report": {
-    "template": "report.md"
+    "template": "report.md",
+    "references": []
   },
   "delivery": {
     "file": {

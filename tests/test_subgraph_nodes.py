@@ -9,11 +9,22 @@ import asyncio
 import unittest
 from datetime import datetime
 
+from src.application.graph.state import Dependencies
 from src.application.subgraphs.base import SubgraphState
 from src.application.subgraphs.kafka.lag import KafkaLag, KafkaLagConfig
+from src.application.subgraphs.kpi.check import KpiCheck, KpiCheckConfig
 from src.application.subgraphs.material.stock import MaterialStock, MaterialStockConfig
 from src.application.subgraphs.material.stock_gumi import GumiMaterialStock
-from src.domain.models import Record, Severity, SnapshotContext
+from src.domain.models import (
+    Metric,
+    Record,
+    Requirement,
+    Severity,
+    SnapshotContext,
+    SubgraphError,
+)
+from src.infrastructure.llm import FakeLLMAdapter
+from tests.helpers import AS_OF
 
 CTX = SnapshotContext(as_of=datetime(2026, 8, 13, 8, 0), gbm="mx", factory="gumi")
 
@@ -170,6 +181,73 @@ class KafkaLagTest(unittest.TestCase):
         sub = KafkaLag(KafkaLagConfig(enabled=True, groups=["a"]), FakeDeps(data=port))
         run(sub.process(SubgraphState(ctx=CTX, scoped=CTX)))
         self.assertEqual(port.calls[0][1].filters["groups"], ["a"])
+
+
+class NarrationFocusTest(unittest.TestCase):
+    """질의가 바꾸는 것은 서술의 초점뿐이다. 숫자와 판정은 그대로다."""
+
+    def _narrate_with(self, requirement):
+        llm = FakeLLMAdapter(model="fake-local", seed="t")
+        sub = KpiCheck(KpiCheckConfig(enabled=True), Dependencies(llm=llm))
+        scoped = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
+        state = SubgraphState(
+            ctx=scoped,
+            scoped=scoped,
+            metrics=[Metric(name="수율", value=97.1, unit="%")],
+            requirement=requirement,
+        )
+        # generate_output이 traces를 이미 drain해 반환하므로, 여기서 다시
+        # drain_traces()를 부르면 빈 리스트만 남는다 — 반환값에서 읽는다.
+        result = asyncio.run(sub.generate_output(state))
+        return result["traces"][0].prompt
+
+    def test_focus_reaches_the_narration_prompt(self):
+        prompt = self._narrate_with(Requirement(query="수율", focus=["수율", "불량"]))
+        self.assertIn("수율, 불량", prompt)
+
+    def test_metrics_are_unchanged_by_focus(self):
+        prompt = self._narrate_with(Requirement(query="수율", focus=["수율"]))
+        self.assertIn("수율: 97.1%", prompt)
+
+    def test_no_requirement_leaves_prompt_unchanged(self):
+        self.assertNotIn("주목해", self._narrate_with(None))
+
+
+class HandleErrorDrainTest(unittest.TestCase):
+    """실패 경로도 어댑터를 비워야 한다.
+
+    서브그래프가 config override로 자기 LLM 어댑터를 가지면 여기 말고는
+    비우는 곳이 없다. 안 비우면 실패 직전까지 쌓인 trace와 잡아낸 환각이
+    영영 갇힌다 — 무엇이 잘못됐는지 가장 알고 싶은 순간에.
+    """
+
+    def _errored(self):
+        llm = FakeLLMAdapter(model="fake-local", seed="t")
+        sub = KpiCheck(KpiCheckConfig(enabled=True), FakeDeps(llm=llm))
+        run(llm.narrate("kpi.check", "실패 직전에 부른 프롬프트"))
+        llm.guardrail_drops.append("kpi.check: 근거 없는 판정을 버렸습니다")
+        state = SubgraphState(
+            ctx=CTX,
+            scoped=CTX,
+            error=SubgraphError(key="kpi.check", slot="process", message="boom"),
+        )
+        return llm, run(sub.handle_error(state))
+
+    def test_traces_survive_the_failure(self):
+        llm, out = self._errored()
+        self.assertEqual(len(out["traces"]), 1)
+        self.assertIn("실패 직전에 부른 프롬프트", out["traces"][0].prompt)
+        self.assertEqual(llm.drain_traces(), [], "어댑터에 남은 게 없어야 한다")
+
+    def test_guardrail_drops_survive_the_failure(self):
+        llm, out = self._errored()
+        self.assertEqual(out["guardrail_drops"], ["kpi.check: 근거 없는 판정을 버렸습니다"])
+        self.assertEqual(llm.drain_guardrail_drops(), [])
+
+    def test_section_is_still_degraded(self):
+        _, out = self._errored()
+        self.assertTrue(out["section"].degraded)
+        self.assertEqual(out["section"].severity, Severity.WARNING)
 
 
 if __name__ == "__main__":

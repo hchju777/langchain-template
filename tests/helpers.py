@@ -88,13 +88,16 @@ def run_graph_with(
     cfg: DeployConfig,
     as_of: datetime = AS_OF,
     replay: dict[str, str] | None = None,
+    query: str | None = None,
 ) -> tuple[dict, Any, dict]:
     """State와 함께 그래프·config도 돌려준다. Time Travel 테스트에 필요하다."""
     env = EnvConfig()
     deps = build_dependencies(cfg, env, replay=replay)
     graph = build_graph(cfg, deps, env, replay=replay)
-    ctx = BaseContext(as_of=as_of, gbm=GBM, factory=FACTORY)
-    run_config = {"configurable": {"thread_id": thread_id_for(GBM, FACTORY, as_of)}}
+    ctx = BaseContext(as_of=as_of, gbm=GBM, factory=FACTORY, query=query)
+    run_config = {
+        "configurable": {"thread_id": thread_id_for(GBM, FACTORY, as_of, query)}
+    }
     state = asyncio.run(graph.ainvoke(ReportState(ctx=ctx), config=run_config))
     return state, graph, run_config
 

@@ -6,8 +6,9 @@
     ChatModelAdapter 실제 LLM. ★ 외부와 통신하는 유일한 지점.
 
 공통 로직(프롬프트 기록, replay, 환각 가드레일)은 BaseLLMAdapter에 있고,
-하위 클래스는 **_complete()와 _judge_raw() 둘만** 구현한다. 그래서 "실제
-LLM과 붙는 코드가 어디냐"는 질문의 답이 ChatModelAdapter의 그 두 메서드다.
+하위 클래스는 **_complete(), _judge_raw(), _plan_raw() 셋만** 구현한다.
+그래서 "실제 LLM과 붙는 코드가 어디냐"는 질문의 답이 ChatModelAdapter의
+그 세 메서드다.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from src.domain.models import Judgement, LLMTrace, Severity
+from src.constants import QUERY_PROMPT_MARKER
+from src.domain.models import Judgement, LLMTrace, Requirement, Severity
 
 #: config의 llm.adapter 값
 ADAPTER_FAKE = "fake"
@@ -64,6 +66,10 @@ class BaseLLMAdapter:
 
     async def _judge_raw(self, prompt: str, allowed_ids: list[str]) -> list[Judgement]:
         """프롬프트 → 구조화된 판정 목록. 검증 전 raw."""
+        raise NotImplementedError
+
+    async def _plan_raw(self, prompt: str, allowed: list[str]) -> Requirement:
+        """프롬프트 → 구조화된 실행 계획. 검증 전 raw."""
         raise NotImplementedError
 
     # -- 공통 경로 -----------------------------------------------------
@@ -125,6 +131,38 @@ class BaseLLMAdapter:
             self._record(node, prompt, payload)
 
         return self._enforce_evidence(node, raw, set(allowed_ids))
+
+    async def plan(self, node: str, prompt: str, allowed: list[str]) -> Requirement:
+        """질의를 실행 계획으로 바꾸고 선택된 이름을 코드로 대조한다.
+
+        judge()가 evidence를 대조하는 것과 같은 구조다. 검사기가 LLM이 아니라
+        집합 연산이므로 검사 자체가 틀릴 수 없다.
+        """
+        if not allowed:
+            return Requirement(is_full_scope=True)
+
+        key = self._replay_key(node, prompt)
+        if key in self._replay:
+            payload = self._replay[key]
+            raw = Requirement(**json.loads(payload))
+            self._record(node, prompt, payload, replayed=True)
+        else:
+            raw = await self._plan_raw(prompt, allowed)
+            payload = json.dumps(raw.model_dump(mode="json"), ensure_ascii=False)
+            self._record(node, prompt, payload)
+
+        return self._enforce_selection(node, raw, set(allowed))
+
+    def _enforce_selection(
+        self, node: str, req: Requirement, allowed: set[str]
+    ) -> Requirement:
+        kept = [n for n in req.selected if n in allowed]
+        dropped = [n for n in req.selected if n not in allowed]
+        if dropped:
+            self.guardrail_drops.append(
+                f"{node}: 등록되지 않은 분석 {dropped!r}을 선택해 제외했습니다"
+            )
+        return req.model_copy(update={"selected": kept, "dropped": dropped})
 
     def _enforce_evidence(
         self, node: str, judgements: list[Judgement], allowed: set[str]
@@ -200,6 +238,25 @@ class FakeLLMAdapter(BaseLLMAdapter):
                 )
             )
         return out
+
+    async def _plan_raw(self, prompt: str, allowed: list[str]) -> Requirement:
+        """질의에 이름이 언급된 분석을 고른다.
+
+        프롬프트에는 고를 수 있는 분석 목록이 함께 실려 있으므로 **질의
+        부분만** 본다. 목록까지 보면 모든 이름이 매칭되어 아무것도 좁혀지지
+        않는다.
+
+        _judge_raw와 마찬가지로 일부러 없는 이름을 하나 섞는다. 가드레일이
+        실제로 도는지 LLM 없이 확인할 수 있어야 하기 때문이다.
+        """
+        query = prompt.rsplit(QUERY_PROMPT_MARKER, 1)[-1]
+        hits = [n for n in allowed if n in query or n.split(".")[-1] in query]
+        picked = hits or allowed[:1]
+        return Requirement(
+            focus=[n.split(".")[-1] for n in picked],
+            selected=[*picked, "nonexistent.analysis"],
+            rationale="질의에 언급된 분석을 선택했습니다.",
+        )
 
 
 # --------------------------------------------------------------------------
@@ -287,6 +344,28 @@ class ChatModelAdapter(BaseLLMAdapter):
             ]
         )
         return result.judgements
+
+    async def _plan_raw(self, prompt: str, allowed: list[str]) -> Requirement:
+        """★ 실제 호출 지점 (실행 계획).
+
+        도구 호출도 루프도 없는 단발 호출이다. 판단에 필요한 재료가 프롬프트에
+        모두 들어 있으므로 반복할 이유가 없다.
+        """
+        listing = "\n".join(f"  {n}" for n in allowed)
+        structured = self._ensure_client().with_structured_output(Requirement)
+        return await structured.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 제조 운영 리포트의 범위를 정합니다. selected에는 "
+                        "아래 목록에 있는 이름만 넣으세요. 목록에 없는 이름을 "
+                        "만들어내면 그 선택은 폐기됩니다.\n" + listing
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
 
 
 # --------------------------------------------------------------------------
