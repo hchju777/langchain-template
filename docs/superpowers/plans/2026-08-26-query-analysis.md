@@ -1931,7 +1931,7 @@ Expected:
 - [ ] **Step 9: 커밋**
 
 ```bash
-git add src/application/usecase.py src/presentation/cli.py config/gbm/mx.json tests/test_query_end_to_end.py
+git add src/config/loader.py src/application/usecase.py src/presentation/cli.py config/gbm/mx.json tests/test_query_end_to_end.py
 git commit -m "Wire --query and --context through to the graph
 
 CLI and scheduler still call the same run_report. The run lock keys on
