@@ -13,6 +13,7 @@ from src.domain.models import (
     DeliveryRecord,
     LLMTrace,
     OverallSummary,
+    ReferenceDoc,
     ReportSection,
     Requirement,
     SubgraphError,
@@ -29,6 +30,8 @@ class ReportState(BaseModel):
     guardrail_drops: Annotated[list[str], operator.add] = Field(default_factory=list)
     #: 질의 분석 결과. analyze_query가 한 번만 쓰므로 리듀서가 없다.
     requirement: Requirement | None = None
+    #: 취합에 실린 배경 문서. aggregate가 한 번만 쓰므로 리듀서가 없다.
+    references: list[ReferenceDoc] = Field(default_factory=list)
     overall: OverallSummary | None = None
     rendered: str | None = None
     delivered: Annotated[list[DeliveryRecord], operator.add] = Field(default_factory=list)
@@ -48,6 +51,8 @@ class Dependencies:
     data: Any = None
     llm: Any = None
     renderer: Any = None
+    #: 취합 단계의 배경 문서. 나중에 검색 어댑터로 갈아끼울 자리다.
+    references: Any = None
     #: 헬스체크는 "어느 저장소가 붙는가"를 보는 것이라 기술 이름이 맞다.
     health: dict[str, Any] = field(default_factory=dict)
     deliveries: list[Any] = field(default_factory=list)

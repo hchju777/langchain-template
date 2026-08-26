@@ -22,6 +22,7 @@ from src.domain.models import (
     HistoricalContext,
     Judgement,
     Record,
+    ReferenceDoc,
     Requirement,
     SnapshotContext,
 )
@@ -95,3 +96,17 @@ class DeliveryPort(Protocol):
     channel: str
 
     async def deliver(self, key: str, content: str) -> str: ...
+
+
+@runtime_checkable
+class ReferencePort(Protocol):
+    """취합 단계에 배경 문서를 공급한다.
+
+    지금은 파일을 읽는 정적 어댑터뿐이지만, 질의에 맞춰 검색하는 어댑터로
+    교체해도 취합 노드는 바뀌지 않는다. requirement를 인자로 받는 이유가
+    그것이다 — 정적 어댑터에는 필요 없지만 검색 어댑터에는 필수다.
+    """
+
+    async def load(
+        self, ctx: BaseContext, requirement: Requirement | None
+    ) -> list[ReferenceDoc]: ...

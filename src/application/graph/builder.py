@@ -44,6 +44,7 @@ from src.constants import (
 from src.infrastructure.checkpoint import build_checkpointer
 from src.infrastructure.delivery import FileDelivery, MailDelivery
 from src.infrastructure.llm import build_llm
+from src.infrastructure.references import StaticReferenceAdapter
 from src.infrastructure.router import DataRouter
 from src.infrastructure.stores import (
     KafkaAdminAdapter,
@@ -58,6 +59,7 @@ def build_dependencies(
     cfg: DeployConfig,
     env: EnvConfig | None = None,
     replay: dict[str, str] | None = None,
+    context_paths: list[str] | None = None,
 ) -> Dependencies:
     """infrastructure와 presentation 어댑터를 만들어 포트에 바인딩한다.
 
@@ -140,10 +142,17 @@ def build_dependencies(
         template=report_cfg.get("template", DEFAULT_REPORT_TEMPLATE)
     )
 
+    # 경로가 틀렸으면 여기서 부팅이 멈춘다. 새벽 배치가 돌다가 알게 되는
+    # 것보다 낫다.
+    references = StaticReferenceAdapter(
+        report_cfg.get("references", []), context_paths or []
+    )
+
     return Dependencies(
         data=DataRouter(routes),
         llm=llm,
         renderer=renderer,
+        references=references,
         health=dict(adapters),
         deliveries=deliveries,
         adapters=list(adapters.values()),
