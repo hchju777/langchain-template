@@ -16,8 +16,10 @@
 - **config를 보는 곳은 Composition Root(`builder.py`)뿐이다.** 노드는 config 객체를 들고 다니지 않는다.
 - **`as_of`는 밖에서 주입된다.** 노드 안에서 `datetime.now()`를 부르지 않는다.
 - 주석과 사용자 노출 문자열은 한국어. 기존 코드의 어조(설명은 "왜"를 적고, 자명한 "무엇"은 적지 않는다)를 따른다.
-- 테스트는 어댑터가 아니라 **그래프 규약과 순수 로직**을 대상으로 한다 (`tests/README.md`).
-- 실행 명령: `.venv/bin/python -m pytest`, 앱은 `.venv/bin/python -m src`.
+- **테스트는 `unittest.TestCase`로 쓴다.** 기존 9개 파일이 전부 그렇고, `tests/README.md`가 "pytest 없이도 돕니다"를 보증한다. 함수형 pytest 테스트나 `import pytest`를 쓰면 `python -m unittest discover`가 신규 테스트를 수집하지 못하고 pytest가 필수 의존이 된다. 예외 검사는 `pytest.raises`가 아니라 `with self.assertRaises(...)`를 쓴다.
+- 테스트는 어댑터가 아니라 **그래프 규약과 순수 로직**을 대상으로 한다 (`tests/README.md`). **예외:** `StaticReferenceAdapter`는 외부 의존이 없는 파일 읽기이고 "경로가 틀리면 부팅에서 멈춘다"가 핵심 동작이라 직접 테스트한다 (Task 6에서 README에 사유를 남긴다).
+- 실행 명령: 테스트는 `.venv/bin/python -m pytest` 또는 `.venv/bin/python -m unittest discover -s tests -t .` (**둘 다 통과해야 한다**), 앱은 `.venv/bin/python -m src`.
+- `FakeLLMAdapter`는 가드레일이 실제로 도는지 LLM 없이 보이려고 **의도적으로 잘못된 값을 섞는** 기존 규약이 있다 (`_judge_raw`가 `f"{ev}::hallucinated"`를 넣는다). 신규 `_plan_raw`도 같은 방식을 따른다.
 
 **검증 완료된 전제:** LangGraph 1.2.11에서 조건부 fan-out으로 일부 노드만 스케줄해도, 모든 서브그래프에서 정적 엣지를 받는 `aggregate`가 정상 실행된다. 실행 안 된 노드는 barrier를 막지 않는다. (설계 문서 8절의 미검증 항목이었으며 최소 그래프로 확인함.)
 
@@ -61,31 +63,32 @@
 `tests/test_checkpoint.py` 끝에 추가:
 
 ```python
-def test_thread_id_unchanged_without_query():
-    """질의가 없으면 기존 문자열 그대로. 스케줄러 체크포인트가 살아있어야 한다."""
-    assert thread_id_for("mx", "gumi", AS_OF) == "mx:gumi:20260813T0800"
+class QueryThreadIdTest(unittest.TestCase):
+    """질의가 실행 범위를 바꾸므로 as_of와 동급의 식별자여야 한다."""
 
+    def test_unchanged_without_query(self):
+        """질의가 없으면 기존 문자열 그대로. 스케줄러 체크포인트가 살아있어야 한다."""
+        self.assertEqual(thread_id_for("mx", "gumi", AS_OF), "mx:gumi:20260813T0800")
 
-def test_thread_id_differs_by_query():
-    a = thread_id_for("mx", "gumi", AS_OF, "재고만")
-    b = thread_id_for("mx", "gumi", AS_OF, "설비만")
-    assert a != b
-    assert a.startswith("mx:gumi:20260813T0800:q")
+    def test_differs_by_query(self):
+        a = thread_id_for("mx", "gumi", AS_OF, "재고만")
+        b = thread_id_for("mx", "gumi", AS_OF, "설비만")
+        self.assertNotEqual(a, b)
+        self.assertTrue(a.startswith("mx:gumi:20260813T0800:q"))
 
+    def test_stable_for_same_query(self):
+        self.assertEqual(
+            thread_id_for("mx", "gumi", AS_OF, "재고만"),
+            thread_id_for("mx", "gumi", AS_OF, "재고만"),
+        )
 
-def test_thread_id_stable_for_same_query():
-    assert thread_id_for("mx", "gumi", AS_OF, "재고만") == thread_id_for(
-        "mx", "gumi", AS_OF, "재고만"
-    )
-
-
-def test_query_digest_empty_without_query():
-    assert query_digest(None) == ""
-    assert query_digest("") == ""
-    assert len(query_digest("재고만")) == 8
+    def test_digest_empty_without_query(self):
+        self.assertEqual(query_digest(None), "")
+        self.assertEqual(query_digest(""), "")
+        self.assertEqual(len(query_digest("재고만")), 8)
 ```
 
-파일 상단 import에 `query_digest`를 추가하고, `AS_OF`가 없으면 `from tests.helpers import AS_OF`를 넣는다.
+파일 상단 `from src.infrastructure.checkpoint import (...)` 목록에 `query_digest`를 추가한다. `unittest`와 `AS_OF`는 이미 import돼 있다.
 
 - [ ] **Step 2: 실패를 확인한다**
 
@@ -190,6 +193,7 @@ LLM 없이 도는 결정론적 대조라 항상 켜 둔다.
 from __future__ import annotations
 
 import asyncio
+import unittest
 
 from src.domain.models import Requirement
 from src.infrastructure.llm import FakeLLMAdapter
@@ -203,40 +207,40 @@ def plan(prompt: str, allowed: list[str] | None = None):
     return req, llm
 
 
-def test_selection_keeps_only_registered_names():
-    """가드레일은 위반한 이름만 버리고 나머지는 살린다."""
-    req, llm = plan("stock 상황을 알려줘")
-    assert "material.stock" in req.selected
-    assert all(name in ALLOWED for name in req.selected)
+class SelectionGuardrailTest(unittest.TestCase):
+    """검사기가 LLM이 아니라 집합 연산이므로 검사 자체가 틀릴 수 없다."""
 
+    def test_keeps_only_registered_names(self):
+        req, _ = plan("stock 상황을 알려줘")
+        self.assertIn("material.stock", req.selected)
+        for name in req.selected:
+            self.assertIn(name, ALLOWED)
 
-def test_selection_records_dropped_names():
-    req, llm = plan("stock 상황을 알려줘")
-    assert req.dropped, "Fake 어댑터는 가드레일 시연용으로 없는 이름을 하나 섞는다"
-    assert all(name not in ALLOWED for name in req.dropped)
-    assert any(req.dropped[0] in d for d in llm.guardrail_drops)
+    def test_records_dropped_names(self):
+        req, llm = plan("stock 상황을 알려줘")
+        self.assertTrue(req.dropped, "Fake는 가드레일 시연용으로 없는 이름을 하나 섞는다")
+        for name in req.dropped:
+            self.assertNotIn(name, ALLOWED)
+        self.assertTrue(any(req.dropped[0] in d for d in llm.guardrail_drops))
 
+    def test_records_trace(self):
+        """프롬프트와 응답이 남아야 replay가 가능하다."""
+        _, llm = plan("stock 상황을 알려줘")
+        traces = llm.drain_traces()
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(traces[0].node, "analyze_query")
+        self.assertIn("stock", traces[0].prompt)
 
-def test_plan_records_trace():
-    """프롬프트와 응답이 남아야 replay가 가능하다."""
-    _, llm = plan("stock 상황을 알려줘")
-    traces = llm.drain_traces()
-    assert len(traces) == 1
-    assert traces[0].node == "analyze_query"
-    assert "stock" in traces[0].prompt
+    def test_full_scope_when_nothing_allowed(self):
+        req, _ = plan("아무거나", allowed=[])
+        self.assertEqual(req.selected, [])
+        self.assertTrue(req.is_full_scope)
 
-
-def test_plan_returns_full_scope_when_nothing_allowed():
-    req, _ = plan("아무거나", allowed=[])
-    assert req.selected == []
-    assert req.is_full_scope is True
-
-
-def test_requirement_defaults_are_empty():
-    req = Requirement()
-    assert req.query == ""
-    assert req.selected == []
-    assert req.is_full_scope is False
+    def test_requirement_defaults_are_empty(self):
+        req = Requirement()
+        self.assertEqual(req.query, "")
+        self.assertEqual(req.selected, [])
+        self.assertFalse(req.is_full_scope)
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -405,7 +409,16 @@ exercised without a real model."
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
-`tests/test_query_planning.py`에 추가 (상단 import에 `from src.application.graph.analyze import ANALYZE_NODE, make_analyze_query`, `from src.application.graph.state import Dependencies, ReportState`, `from src.domain.models import BaseContext`, `from datetime import datetime`, `from tests.helpers import AS_OF` 보강):
+`tests/test_query_planning.py`에 추가. 상단 import에 다음을 보강한다:
+
+```python
+from src.application.graph.analyze import make_analyze_query
+from src.application.graph.state import Dependencies, ReportState
+from src.domain.models import BaseContext
+from tests.helpers import AS_OF
+```
+
+본문에 추가:
 
 ```python
 TITLES = {"material.stock": "자재 소진 예상", "kpi.check": "KPI 점검",
@@ -419,50 +432,47 @@ def run_node(query, llm=None):
     return asyncio.run(node(ReportState(ctx=ctx)))
 
 
-def test_no_query_selects_everything_without_calling_llm():
-    """스케줄러 경로. LLM을 부르지 않아야 비용도 지연도 늘지 않는다."""
-    out = run_node(None)
-    req = out["requirement"]
-    assert req.selected == ALLOWED
-    assert req.is_full_scope is True
-    assert not out.get("traces")
+class AnalyzeQueryNodeTest(unittest.TestCase):
+    def test_no_query_selects_everything_without_calling_llm(self):
+        """스케줄러 경로. LLM을 부르지 않아야 비용도 지연도 늘지 않는다."""
+        out = run_node(None)
+        req = out["requirement"]
+        self.assertEqual(req.selected, ALLOWED)
+        self.assertTrue(req.is_full_scope)
+        self.assertFalse(out.get("traces"))
 
+    def test_query_narrows_selection(self):
+        out = run_node("stock 상황을 알려줘")
+        req = out["requirement"]
+        self.assertEqual(req.selected, ["material.stock"])
+        self.assertEqual(req.query, "stock 상황을 알려줘")
+        self.assertFalse(req.is_full_scope)
 
-def test_query_narrows_selection():
-    out = run_node("stock 상황을 알려줘")
-    req = out["requirement"]
-    assert req.selected == ["material.stock"]
-    assert req.query == "stock 상황을 알려줘"
-    assert req.is_full_scope is False
+    def test_prompt_carries_titles(self):
+        """등록명만으로는 LLM이 무슨 분석인지 알 수 없다."""
+        out = run_node("stock 상황을 알려줘")
+        self.assertTrue(out["traces"], "질의가 있으면 trace가 남아야 한다")
+        self.assertIn("자재 소진 예상", out["traces"][0].prompt)
 
+    def test_llm_failure_falls_back_to_full_scope(self):
+        class Boom(FakeLLMAdapter):
+            async def _plan_raw(self, prompt, allowed):
+                raise RuntimeError("모델 응답 없음")
 
-def test_prompt_carries_titles():
-    """등록명만으로는 LLM이 무슨 분석인지 알 수 없다."""
-    out = run_node("stock 상황을 알려줘")
-    assert out["traces"], "질의가 있으면 trace가 남아야 한다"
-    assert "자재 소진 예상" in out["traces"][0].prompt
+        out = run_node("stock 상황", llm=Boom(model="fake-local"))
+        req = out["requirement"]
+        self.assertEqual(req.selected, ALLOWED)
+        self.assertTrue(req.is_full_scope)
+        self.assertTrue(any("RuntimeError" in d for d in out["guardrail_drops"]))
 
+    def test_empty_selection_falls_back_to_full_scope(self):
+        class Empty(FakeLLMAdapter):
+            async def _plan_raw(self, prompt, allowed):
+                return Requirement(selected=["nonexistent.only"])
 
-def test_llm_failure_falls_back_to_full_scope():
-    class Boom(FakeLLMAdapter):
-        async def _plan_raw(self, prompt, allowed):
-            raise RuntimeError("모델 응답 없음")
-
-    out = run_node("stock 상황", llm=Boom(model="fake-local"))
-    req = out["requirement"]
-    assert req.selected == ALLOWED
-    assert req.is_full_scope is True
-    assert any("RuntimeError" in d for d in out["guardrail_drops"])
-
-
-def test_empty_selection_falls_back_to_full_scope():
-    class Empty(FakeLLMAdapter):
-        async def _plan_raw(self, prompt, allowed):
-            return Requirement(selected=["nonexistent.only"])
-
-    out = run_node("무관한 질의", llm=Empty(model="fake-local"))
-    assert out["requirement"].selected == ALLOWED
-    assert out["requirement"].is_full_scope is True
+        out = run_node("무관한 질의", llm=Empty(model="fake-local"))
+        self.assertEqual(out["requirement"].selected, ALLOWED)
+        self.assertTrue(out["requirement"].is_full_scope)
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -596,42 +606,41 @@ running everything, because an empty report is worse than a broad one."
 
 from __future__ import annotations
 
-from tests.helpers import AS_OF, run_graph, temp_config, with_subgraph_patch
+import unittest
+
+from tests.helpers import run_graph, temp_config, with_subgraph_patch
 
 
 def _cfg():
     return with_subgraph_patch(lambda c: None)
 
 
-def test_no_query_runs_every_enabled_subgraph():
-    with temp_config(gbm=_cfg()) as cfg:
-        state = run_graph(cfg)
-    keys = {s.key for s in state["sections"]}
-    assert "material.stock" in keys
-    assert "kpi.check" in keys
-    assert len(keys) >= 5, f"전체가 돌아야 한다: {keys}"
+class QueryRoutingTest(unittest.TestCase):
+    def test_no_query_runs_every_enabled_subgraph(self):
+        with temp_config(gbm=_cfg()) as cfg:
+            state = run_graph(cfg)
+        keys = {s.key for s in state["sections"]}
+        self.assertIn("material.stock", keys)
+        self.assertIn("kpi.check", keys)
+        self.assertGreaterEqual(len(keys), 5, f"전체가 돌아야 한다: {keys}")
 
+    def test_no_query_leaves_requirement_full_scope(self):
+        with temp_config(gbm=_cfg()) as cfg:
+            state = run_graph(cfg)
+        self.assertTrue(state["requirement"].is_full_scope)
 
-def test_no_query_leaves_requirement_full_scope():
-    with temp_config(gbm=_cfg()) as cfg:
-        state = run_graph(cfg)
-    assert state["requirement"].is_full_scope is True
+    def test_query_runs_only_selected_subgraphs(self):
+        """Fake 어댑터는 프롬프트에 이름이 있는 분석을 고른다."""
+        with temp_config(gbm=_cfg()) as cfg:
+            state = run_graph(cfg, query="material.stock 만 보여줘")
+        self.assertEqual({s.key for s in state["sections"]}, {"material.stock"})
 
-
-def test_query_runs_only_selected_subgraphs():
-    """Fake 어댑터는 프롬프트에 이름이 있는 분석을 고른다."""
-    with temp_config(gbm=_cfg()) as cfg:
-        state = run_graph(cfg, query="material.stock 만 보여줘")
-    keys = {s.key for s in state["sections"]}
-    assert keys == {"material.stock"}
-
-
-def test_aggregate_runs_even_when_some_subgraphs_are_skipped():
-    """일부만 스케줄돼도 취합 barrier가 막히지 않아야 한다."""
-    with temp_config(gbm=_cfg()) as cfg:
-        state = run_graph(cfg, query="material.stock 만 보여줘")
-    assert state["overall"] is not None
-    assert state["rendered"]
+    def test_aggregate_runs_even_when_some_subgraphs_are_skipped(self):
+        """일부만 스케줄돼도 취합 barrier가 막히지 않아야 한다."""
+        with temp_config(gbm=_cfg()) as cfg:
+            state = run_graph(cfg, query="material.stock 만 보여줘")
+        self.assertIsNotNone(state["overall"])
+        self.assertTrue(state["rendered"])
 ```
 
 `tests/helpers.py`의 `run_graph`/`run_graph_with`에 질의를 넘길 수 있어야 한다. 두 함수를 고친다:
@@ -760,47 +769,47 @@ scheduled, verified against 1.2.11 with a minimal graph."
 
 `tests/test_subgraph_nodes.py` 끝에 추가:
 
+파일 상단 import에 다음을 보강한다 (`asyncio`, `unittest`, `AS_OF`는 이미 있다):
+
 ```python
-def test_focus_reaches_the_narration_prompt():
-    """질의의 초점이 세부 요약 프롬프트에 실린다."""
-    from src.application.subgraphs.base import SubgraphState
-    from src.domain.models import Metric, Requirement, SnapshotContext
-    from src.infrastructure.llm import FakeLLMAdapter
-    from src.application.subgraphs.kpi.check import KpiCheck, KpiCheckConfig
-    from src.application.graph.state import Dependencies
-
-    llm = FakeLLMAdapter(model="fake-local", seed="t")
-    sub = KpiCheck(KpiCheckConfig(enabled=True), Dependencies(llm=llm))
-    scoped = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
-    state = SubgraphState(
-        ctx=scoped,
-        scoped=scoped,
-        metrics=[Metric(name="수율", value=97.1, unit="%")],
-        requirement=Requirement(query="수율", focus=["수율", "불량"]),
-    )
-    asyncio.run(sub.generate_output(state))
-    prompt = llm.drain_traces()[0].prompt
-    assert "수율, 불량" in prompt
-
-
-def test_no_requirement_leaves_prompt_unchanged():
-    from src.application.subgraphs.base import SubgraphState
-    from src.domain.models import Metric, SnapshotContext
-    from src.infrastructure.llm import FakeLLMAdapter
-    from src.application.subgraphs.kpi.check import KpiCheck, KpiCheckConfig
-    from src.application.graph.state import Dependencies
-
-    llm = FakeLLMAdapter(model="fake-local", seed="t")
-    sub = KpiCheck(KpiCheckConfig(enabled=True), Dependencies(llm=llm))
-    scoped = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
-    state = SubgraphState(
-        ctx=scoped, scoped=scoped, metrics=[Metric(name="수율", value=97.1, unit="%")]
-    )
-    asyncio.run(sub.generate_output(state))
-    assert "주목해" not in llm.drain_traces()[0].prompt
+from src.application.graph.state import Dependencies
+from src.application.subgraphs.kpi.check import KpiCheck, KpiCheckConfig
+from src.domain.models import Requirement, SnapshotContext
+from src.infrastructure.llm import FakeLLMAdapter
 ```
 
-파일 상단에 `import asyncio`와 `from tests.helpers import AS_OF`가 없으면 추가한다.
+본문에 추가:
+
+```python
+class NarrationFocusTest(unittest.TestCase):
+    """질의가 바꾸는 것은 서술의 초점뿐이다. 숫자와 판정은 그대로다."""
+
+    def _narrate_with(self, requirement):
+        llm = FakeLLMAdapter(model="fake-local", seed="t")
+        sub = KpiCheck(KpiCheckConfig(enabled=True), Dependencies(llm=llm))
+        scoped = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
+        state = SubgraphState(
+            ctx=scoped,
+            scoped=scoped,
+            metrics=[Metric(name="수율", value=97.1, unit="%")],
+            requirement=requirement,
+        )
+        asyncio.run(sub.generate_output(state))
+        return llm.drain_traces()[0].prompt
+
+    def test_focus_reaches_the_narration_prompt(self):
+        prompt = self._narrate_with(Requirement(query="수율", focus=["수율", "불량"]))
+        self.assertIn("수율, 불량", prompt)
+
+    def test_metrics_are_unchanged_by_focus(self):
+        prompt = self._narrate_with(Requirement(query="수율", focus=["수율"]))
+        self.assertIn("수율: 97.1%", prompt)
+
+    def test_no_requirement_leaves_prompt_unchanged(self):
+        self.assertNotIn("주목해", self._narrate_with(None))
+```
+
+`SubgraphState`와 `Metric`은 이 파일이 이미 import하고 있다. 없으면 함께 보강한다.
 
 - [ ] **Step 2: 실패를 확인한다**
 
@@ -872,6 +881,7 @@ still come from State rather than from the model."
 - Create: `src/infrastructure/references.py`
 - Modify: `src/application/graph/state.py` (`Dependencies.references`, `ReportState.references`)
 - Modify: `src/application/graph/builder.py:142-149` (`build_dependencies` 반환)
+- Modify: `tests/README.md` ("아직 없는 것"의 어댑터 항목에 예외 사유)
 - Test: `tests/test_references.py` (신규)
 
 **Interfaces:**
@@ -889,9 +899,8 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 from src.domain.models import BaseContext
 from src.infrastructure.references import StaticReferenceAdapter
@@ -901,54 +910,64 @@ CTX = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi")
 
 
 def _write(root: Path, name: str, body: str) -> str:
-    path = root / name
-    path.write_text(body, encoding="utf-8")
+    (root / name).write_text(body, encoding="utf-8")
     return name
 
 
-def test_config_documents_get_sop_ids():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        a = _write(root, "sop.md", "# 정기점검 기준\n본문")
-        b = _write(root, "kpi.md", "# KPI 정의\n본문")
-        adapter = StaticReferenceAdapter([a, b], root=root)
-        docs = asyncio.run(adapter.load(CTX, None))
-    assert [d.id for d in docs] == ["sop-01", "sop-02"]
-    assert docs[0].title == "정기점검 기준"
-    assert "본문" in docs[0].content
+class StaticReferenceAdapterTest(unittest.TestCase):
+    """어댑터를 직접 테스트하는 예외다. 외부 의존이 없는 파일 읽기이고,
+    '경로가 틀리면 부팅에서 멈춘다'가 이 어댑터의 핵심 동작이라 검증 가치가 크다.
+    """
 
+    def test_config_documents_get_sop_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = _write(root, "sop.md", "# 정기점검 기준\n본문")
+            b = _write(root, "kpi.md", "# KPI 정의\n본문")
+            docs = asyncio.run(
+                StaticReferenceAdapter([a, b], root=root).load(CTX, None)
+            )
+        self.assertEqual([d.id for d in docs], ["sop-01", "sop-02"])
+        self.assertEqual(docs[0].title, "정기점검 기준")
+        self.assertIn("본문", docs[0].content)
 
-def test_attached_documents_get_attach_ids():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        a = _write(root, "sop.md", "# 기준\n본문")
-        b = _write(root, "plan.md", "# 정비 계획\n오늘 A라인 점검")
-        adapter = StaticReferenceAdapter([a], attached_paths=[root / b], root=root)
-        docs = asyncio.run(adapter.load(CTX, None))
-    assert [d.id for d in docs] == ["sop-01", "attach-01"]
-    assert docs[1].title == "정비 계획"
+    def test_attached_documents_get_attach_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = _write(root, "sop.md", "# 기준\n본문")
+            b = _write(root, "plan.md", "# 정비 계획\n오늘 A라인 점검")
+            docs = asyncio.run(
+                StaticReferenceAdapter(
+                    [a], attached_paths=[root / b], root=root
+                ).load(CTX, None)
+            )
+        self.assertEqual([d.id for d in docs], ["sop-01", "attach-01"])
+        self.assertEqual(docs[1].title, "정비 계획")
 
+    def test_missing_file_fails_at_construction(self):
+        """새벽 실행 중에 발견되는 것보다 부팅에서 멈추는 게 낫다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError) as caught:
+                StaticReferenceAdapter(["없는파일.md"], root=Path(tmp))
+        self.assertIn("없는파일.md", str(caught.exception))
 
-def test_missing_file_fails_at_construction():
-    """새벽 실행 중에 발견되는 것보다 부팅에서 멈추는 게 낫다."""
-    with tempfile.TemporaryDirectory() as tmp:
-        with pytest.raises(FileNotFoundError) as exc:
-            StaticReferenceAdapter(["없는파일.md"], root=Path(tmp))
-    assert "없는파일.md" in str(exc.value)
+    def test_no_documents_is_fine(self):
+        docs = asyncio.run(StaticReferenceAdapter([]).load(CTX, None))
+        self.assertEqual(docs, [])
 
+    def test_title_falls_back_to_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = _write(root, "note.md", "제목 없는 본문")
+            docs = asyncio.run(StaticReferenceAdapter([a], root=root).load(CTX, None))
+        self.assertEqual(docs[0].title, "note")
+```
 
-def test_no_documents_is_fine():
-    adapter = StaticReferenceAdapter([])
-    assert asyncio.run(adapter.load(CTX, None)) == []
+**Step 1b: README에 예외 사유를 남긴다.** `tests/README.md`의 "아직 없는 것" 절에서 어댑터 항목을 다음으로 바꾼다:
 
-
-def test_title_falls_back_to_filename():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        a = _write(root, "note.md", "제목 없는 본문")
-        adapter = StaticReferenceAdapter([a], root=root)
-        docs = asyncio.run(adapter.load(CTX, None))
-    assert docs[0].title == "note"
+```markdown
+- **어댑터 테스트** — 의도적으로 뺐습니다. 이유와 대가는 [설계 문서 §11](../docs/superpowers/specs/2026-08-13-langgraph-report-template-design.md)에 있습니다.
+  예외는 [test_references.py](test_references.py) 하나입니다 — `StaticReferenceAdapter`는 외부 의존 없이 로컬 파일만 읽고, "경로가 틀리면 부팅에서 멈춘다"가 그 어댑터의 핵심 동작이라 검증합니다
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -1155,6 +1174,7 @@ the call site."
 from __future__ import annotations
 
 import asyncio
+import unittest
 
 from src.application.graph.aggregate import _unknown_citations, make_aggregate
 from src.application.graph.state import Dependencies, ReportState
@@ -1173,11 +1193,22 @@ CTX = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi")
 
 
 class Refs:
+    """참고 문서 포트의 가짜 구현. 파일을 읽지 않는다."""
+
     def __init__(self, docs):
         self.docs = docs
 
     async def load(self, ctx, requirement):
         return list(self.docs)
+
+
+class Cites(FakeLLMAdapter):
+    """정해진 문장을 그대로 서술로 내놓는다. 인용 검사를 겨냥한 것이다."""
+
+    text = ""
+
+    async def _complete(self, prompt):
+        return self.text
 
 
 def _state(**kw):
@@ -1199,60 +1230,54 @@ def _run(docs=(), llm=None, state=None):
     return asyncio.run(make_aggregate(deps)(state or _state()))
 
 
-def test_unknown_citations_flags_only_unlisted_ids():
-    allowed = {"kpi.check", "sop-01"}
-    assert _unknown_citations("[kpi.check] 와 [sop-01] 참고", allowed) == []
-    assert _unknown_citations("[sop-09] 에 따르면", allowed) == ["sop-09"]
+def _citing(text):
+    llm = Cites(model="fake-local")
+    llm.text = text
+    return llm
 
 
-def test_reference_documents_reach_the_prompt_with_ids():
-    docs = [ReferenceDoc(id="sop-01", source="s", title="정기점검 기준", content="A라인 점검 중")]
-    out = _run(docs=docs)
-    prompt = out["traces"][0].prompt
-    assert "[sop-01]" in prompt
-    assert "A라인 점검 중" in prompt
+class CitationCheckTest(unittest.TestCase):
+    def test_flags_only_unlisted_ids(self):
+        allowed = {"kpi.check", "sop-01"}
+        self.assertEqual(_unknown_citations("[kpi.check] 와 [sop-01] 참고", allowed), [])
+        self.assertEqual(_unknown_citations("[sop-09] 에 따르면", allowed), ["sop-09"])
+
+    def test_unknown_citation_is_recorded_as_guardrail_drop(self):
+        out = _run(llm=_citing("[sop-99] 에 따르면 조치가 필요합니다."))
+        self.assertTrue(any("sop-99" in d for d in out["guardrail_drops"]))
+
+    def test_valid_citation_is_not_flagged(self):
+        docs = [ReferenceDoc(id="sop-01", source="s", title="기준", content="본문")]
+        out = _run(docs=docs, llm=_citing("[sop-01] 기준에 비추어 정상입니다."))
+        self.assertEqual(out["guardrail_drops"], [])
+
+    def test_narrative_is_kept_even_when_citation_is_unknown(self):
+        """취합 서술은 판정이 아니라 요약이라 폐기 대상이 아니다."""
+        out = _run(llm=_citing("[sop-99] 에 따르면 조치가 필요합니다."))
+        self.assertIn("조치가 필요합니다", out["overall"].narrative)
 
 
-def test_reference_documents_land_in_state():
-    docs = [ReferenceDoc(id="sop-01", source="s", title="기준", content="본문")]
-    out = _run(docs=docs)
-    assert [d.id for d in out["references"]] == ["sop-01"]
+class AggregateReferenceTest(unittest.TestCase):
+    def test_documents_reach_the_prompt_with_ids(self):
+        docs = [
+            ReferenceDoc(
+                id="sop-01", source="s", title="정기점검 기준", content="A라인 점검 중"
+            )
+        ]
+        prompt = _run(docs=docs)["traces"][0].prompt
+        self.assertIn("[sop-01]", prompt)
+        self.assertIn("A라인 점검 중", prompt)
 
+    def test_documents_land_in_state(self):
+        docs = [ReferenceDoc(id="sop-01", source="s", title="기준", content="본문")]
+        out = _run(docs=docs)
+        self.assertEqual([d.id for d in out["references"]], ["sop-01"])
 
-def test_unknown_citation_is_recorded_as_guardrail_drop():
-    class Cites(FakeLLMAdapter):
-        async def _complete(self, prompt):
-            return "[sop-99] 에 따르면 조치가 필요합니다."
-
-    out = _run(llm=Cites(model="fake-local"))
-    assert any("sop-99" in d for d in out["guardrail_drops"])
-
-
-def test_valid_citation_is_not_flagged():
-    docs = [ReferenceDoc(id="sop-01", source="s", title="기준", content="본문")]
-
-    class Cites(FakeLLMAdapter):
-        async def _complete(self, prompt):
-            return "[sop-01] 기준에 비추어 정상입니다."
-
-    out = _run(docs=docs, llm=Cites(model="fake-local"))
-    assert out["guardrail_drops"] == []
-
-
-def test_narrative_is_kept_even_when_citation_is_unknown():
-    """취합 서술은 판정이 아니라 요약이라 폐기 대상이 아니다."""
-
-    class Cites(FakeLLMAdapter):
-        async def _complete(self, prompt):
-            return "[sop-99] 에 따르면 조치가 필요합니다."
-
-    out = _run(llm=Cites(model="fake-local"))
-    assert "조치가 필요합니다" in out["overall"].narrative
-
-
-def test_focus_reaches_the_aggregate_prompt():
-    out = _run(state=_state(requirement=Requirement(query="재고", focus=["재고", "소진"])))
-    assert "재고, 소진" in out["traces"][0].prompt
+    def test_focus_reaches_the_prompt(self):
+        out = _run(
+            state=_state(requirement=Requirement(query="재고", focus=["재고", "소진"]))
+        )
+        self.assertIn("재고, 소진", out["traces"][0].prompt)
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -1378,6 +1403,7 @@ edited out — cutting mid-sentence would leave unreadable prose."
 from __future__ import annotations
 
 import asyncio
+import unittest
 
 from src.application.graph.aggregate import make_deliver
 from src.application.graph.state import Dependencies, ReportState
@@ -1385,8 +1411,12 @@ from src.domain.models import BaseContext
 from src.infrastructure.delivery import FileDelivery, MailDelivery
 from tests.helpers import AS_OF
 
+SCHEDULED_KEY = "mx_gumi_20260813T0800"
+
 
 class Spy:
+    """발송 채널의 가짜 구현. 실제 I/O 없이 받은 키만 기록한다."""
+
     def __init__(self, channel, broadcast):
         self.channel = channel
         self.broadcast = broadcast
@@ -1400,43 +1430,39 @@ class Spy:
 def _run(query, channels):
     deps = Dependencies(deliveries=channels)
     ctx = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi", query=query)
-    state = ReportState(ctx=ctx, rendered="본문")
-    return asyncio.run(make_deliver(deps)(state))
+    return asyncio.run(make_deliver(deps)(ReportState(ctx=ctx, rendered="본문")))
 
 
-def test_scheduled_run_uses_every_channel():
-    file_ch, mail_ch = Spy("file", False), Spy("mail", True)
-    out = _run(None, [file_ch, mail_ch])
-    assert len(out["delivered"]) == 2
-    assert file_ch.keys == ["mx_gumi_20260813T0800"]
-    assert mail_ch.keys == ["mx_gumi_20260813T0800"]
+class DeliveryScopeTest(unittest.TestCase):
+    def test_scheduled_run_uses_every_channel(self):
+        file_ch, mail_ch = Spy("file", False), Spy("mail", True)
+        out = _run(None, [file_ch, mail_ch])
+        self.assertEqual(len(out["delivered"]), 2)
+        self.assertEqual(file_ch.keys, [SCHEDULED_KEY])
+        self.assertEqual(mail_ch.keys, [SCHEDULED_KEY])
 
+    def test_query_run_skips_broadcast_channels(self):
+        file_ch, mail_ch = Spy("file", False), Spy("mail", True)
+        out = _run("재고만", [file_ch, mail_ch])
+        self.assertEqual([d.channel for d in out["delivered"]], ["file"])
+        self.assertEqual(mail_ch.keys, [])
 
-def test_query_run_skips_broadcast_channels():
-    file_ch, mail_ch = Spy("file", False), Spy("mail", True)
-    out = _run("재고만", [file_ch, mail_ch])
-    assert [d.channel for d in out["delivered"]] == ["file"]
-    assert mail_ch.keys == []
+    def test_query_run_uses_a_distinct_idempotency_key(self):
+        """정규 리포트 파일을 덮어쓰면 안 된다."""
+        file_ch = Spy("file", False)
+        _run("재고만", [file_ch])
+        self.assertTrue(file_ch.keys[0].startswith(f"{SCHEDULED_KEY}_q"))
+        self.assertNotEqual(file_ch.keys[0], SCHEDULED_KEY)
 
+    def test_same_query_reuses_the_same_key(self):
+        a, b = Spy("file", False), Spy("file", False)
+        _run("재고만", [a])
+        _run("재고만", [b])
+        self.assertEqual(a.keys, b.keys)
 
-def test_query_run_uses_a_distinct_idempotency_key():
-    """정규 리포트 파일을 덮어쓰면 안 된다."""
-    file_ch = Spy("file", False)
-    _run("재고만", [file_ch])
-    assert file_ch.keys[0].startswith("mx_gumi_20260813T0800_q")
-    assert file_ch.keys[0] != "mx_gumi_20260813T0800"
-
-
-def test_same_query_reuses_the_same_key():
-    a, b = Spy("file", False), Spy("file", False)
-    _run("재고만", [a])
-    _run("재고만", [b])
-    assert a.keys == b.keys
-
-
-def test_shipped_channels_declare_broadcast():
-    assert FileDelivery.broadcast is False
-    assert MailDelivery.broadcast is True
+    def test_shipped_channels_declare_broadcast(self):
+        self.assertFalse(FileDelivery.broadcast)
+        self.assertTrue(MailDelivery.broadcast)
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -1559,54 +1585,48 @@ overwrite the scheduled report or mark it as already sent."
 
 `tests/test_renderer.py` 끝에 추가:
 
+파일 상단 import에 `Requirement`를 보강한다 (`BaseContext`, `CTX`, `unittest`는 이미 있다).
+
 ```python
-def test_scope_line_absent_for_full_scope():
-    from src.domain.models import Requirement
-    from src.presentation.renderers import MarkdownRenderer
+class ScopeLineTest(unittest.TestCase):
+    """선택 실행과 전체 실행을 읽는 사람이 구분할 수 있어야 한다."""
 
-    ctx = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi")
-    out = MarkdownRenderer().render(
-        ctx,
-        {
-            "sections": [],
-            "overall": None,
-            "requirement": Requirement(selected=["kpi.check"], is_full_scope=True),
-        },
-    )
-    assert "질의" not in out
+    def _render(self, payload):
+        return MarkdownRenderer().render(CTX, payload)
 
+    def test_absent_for_full_scope(self):
+        out = self._render(
+            {
+                "sections": [],
+                "overall": None,
+                "requirement": Requirement(
+                    selected=["kpi.check"], is_full_scope=True
+                ),
+            }
+        )
+        self.assertNotIn("질의", out)
 
-def test_scope_line_shows_query_and_selection():
-    from src.domain.models import Requirement
-    from src.presentation.renderers import MarkdownRenderer
+    def test_shows_query_and_selection(self):
+        out = self._render(
+            {
+                "sections": [],
+                "overall": None,
+                "requirement": Requirement(
+                    query="재고만 보여줘",
+                    selected=["material.stock"],
+                    is_full_scope=False,
+                ),
+            }
+        )
+        self.assertIn("재고만 보여줘", out)
+        self.assertIn("material.stock", out)
 
-    ctx = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi", query="재고만 보여줘")
-    out = MarkdownRenderer().render(
-        ctx,
-        {
-            "sections": [],
-            "overall": None,
-            "requirement": Requirement(
-                query="재고만 보여줘",
-                selected=["material.stock"],
-                is_full_scope=False,
-            ),
-        },
-    )
-    assert "재고만 보여줘" in out
-    assert "material.stock" in out
-
-
-def test_scope_line_absent_without_requirement():
-    """기존 호출부가 requirement 없이 불러도 죽지 않는다."""
-    from src.presentation.renderers import MarkdownRenderer
-
-    ctx = BaseContext(as_of=AS_OF, gbm="mx", factory="gumi")
-    out = MarkdownRenderer().render(ctx, {"sections": [], "overall": None})
-    assert "질의" not in out
+    def test_absent_without_requirement(self):
+        """기존 호출부가 requirement 없이 불러도 죽지 않는다."""
+        out = self._render({"sections": [], "overall": None})
+        self.assertNotIn("질의", out)
+        self.assertNotIn("${scope}", out)
 ```
-
-파일 상단에 `from src.domain.models import BaseContext`와 `from tests.helpers import AS_OF`가 없으면 추가한다.
 
 - [ ] **Step 2: 실패를 확인한다**
 
@@ -1727,10 +1747,13 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import unittest
 from pathlib import Path
 
 from src.application.usecase import run_report
 from tests.helpers import AS_OF, FACTORY, GBM, temp_config, with_subgraph_patch
+
+SCHEDULED_THREAD = "mx:gumi:20260813T0800"
 
 
 def _run(**kw):
@@ -1741,26 +1764,25 @@ def _run(**kw):
         )
 
 
-def test_scheduler_path_is_unchanged():
-    run = _run()
-    assert run.thread_id == "mx:gumi:20260813T0800"
-    assert run.state["requirement"].is_full_scope is True
+class QueryEndToEndTest(unittest.TestCase):
+    def test_scheduler_path_is_unchanged(self):
+        run = _run()
+        self.assertEqual(run.thread_id, SCHEDULED_THREAD)
+        self.assertTrue(run.state["requirement"].is_full_scope)
 
+    def test_query_narrows_the_report(self):
+        run = _run(query="material.stock 만")
+        self.assertEqual({s.key for s in run.sections}, {"material.stock"})
+        self.assertTrue(run.thread_id.startswith(f"{SCHEDULED_THREAD}:q"))
+        self.assertIn("material.stock", run.rendered)
 
-def test_query_narrows_the_report():
-    run = _run(query="material.stock 만")
-    assert {s.key for s in run.sections} == {"material.stock"}
-    assert run.thread_id.startswith("mx:gumi:20260813T0800:q")
-    assert "material.stock" in run.rendered
-
-
-def test_context_documents_reach_the_report_state():
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "plan.md"
-        path.write_text("# 정비 계획\n오늘 A라인 점검", encoding="utf-8")
-        run = _run(query="material.stock 만", context_paths=[str(path)])
-    assert [d.id for d in run.state["references"]] == ["attach-01"]
-    assert run.state["references"][0].title == "정비 계획"
+    def test_context_documents_reach_the_report_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "plan.md"
+            path.write_text("# 정비 계획\n오늘 A라인 점검", encoding="utf-8")
+            run = _run(query="material.stock 만", context_paths=[str(path)])
+        self.assertEqual([d.id for d in run.state["references"]], ["attach-01"])
+        self.assertEqual(run.state["references"][0].title, "정비 계획")
 ```
 
 `DeployConfig`는 config 경로를 `self._root`(private)로만 갖고 있다. 테스트가 private에 손대지 않도록 읽기 전용 속성을 하나 연다. `src/config/loader.py:66`의 `self.data = self._load_merged()` 아래에 추가:
@@ -1929,3 +1951,5 @@ happens to be running."
 **미검증으로 남은 것 없음** — 설계 문서가 유일한 가정으로 표시했던 "조건부 fan-out에서 취합 barrier가 도는가"는 계획 작성 전에 LangGraph 1.2.11로 확인했다(Global Constraints 참조). 확인 결과가 반대였다면 Task 4의 구조가 달라졌을 것이다.
 
 **회귀 방어선** — Task 1·4·8·9·10에 "질의 없는 경로가 그대로인가"를 확인하는 테스트가 각각 들어 있다. 특히 Task 4 Step 5의 `tests/test_graph_behaviour.py` 통과가 핵심 신호다.
+
+**실행 전 규약 대조에서 고친 것** — 초안은 테스트를 pytest 함수형으로 썼는데, 이 저장소는 9개 파일 전부가 `unittest.TestCase`이고 `tests/README.md`가 "pytest 없이도 돕니다"를 보증한다. 그대로 갔으면 `python -m unittest discover`가 신규 테스트를 하나도 수집하지 못했을 것이다. 전 태스크의 테스트를 `unittest`로 바꿨고, Global Constraints에 두 실행 명령이 **모두** 통과해야 한다고 못박았다. 또한 `tests/README.md`가 어댑터 테스트를 의도적으로 제외하고 있어, Task 6이 그 예외임을 README에 남기는 단계를 추가했다.
