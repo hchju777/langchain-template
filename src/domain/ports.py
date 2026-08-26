@@ -22,6 +22,7 @@ from src.domain.models import (
     HistoricalContext,
     Judgement,
     Record,
+    Requirement,
     SnapshotContext,
 )
 
@@ -74,6 +75,10 @@ class LLMPort(Protocol):
     async def judge(
         self, node: str, prompt: str, allowed_ids: list[str]
     ) -> list[Judgement]: ...
+
+    async def plan(
+        self, node: str, prompt: str, allowed: list[str]
+    ) -> Requirement: ...
 
 
 @runtime_checkable

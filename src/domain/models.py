@@ -70,6 +70,28 @@ class FetchSpec(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# 질의
+# --------------------------------------------------------------------------
+class Requirement(BaseModel):
+    """질의를 구조화한 결과. 무엇을 볼지와 어디에 초점을 둘지를 담는다.
+
+    selected는 가드레일을 통과한 이름만 남는다. 원본에 없는 이름이 있었다면
+    dropped에 남으므로, 리포트를 보고 LLM이 무엇을 지어냈는지 역추적할 수 있다.
+    """
+
+    query: str = ""
+    #: 서술 초점에 쓰는 관심 키워드
+    focus: list[str] = Field(default_factory=list)
+    #: 실행할 서브그래프 등록명
+    selected: list[str] = Field(default_factory=list)
+    rationale: str = ""
+    #: 가드레일이 버린 이름
+    dropped: list[str] = Field(default_factory=list)
+    #: 질의가 없거나 분석에 실패해 전체를 선택한 경우
+    is_full_scope: bool = False
+
+
+# --------------------------------------------------------------------------
 # 판정
 # --------------------------------------------------------------------------
 class Severity(IntEnum):
