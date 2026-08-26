@@ -65,6 +65,8 @@ async def run_report(
     replay: dict[str, str] | None = None,
     on_node: Any = None,
     config_root: Path | None = None,
+    query: str | None = None,
+    context_paths: list[str] | None = None,
 ) -> ReportRun:
     """조립 → 실행 → 결과.
 
@@ -78,11 +80,11 @@ async def run_report(
     env = env or EnvConfig()
     cfg = DeployConfig(gbm, factory, root=config_root)
 
-    deps = build_dependencies(cfg, env, replay=replay)
+    deps = build_dependencies(cfg, env, replay=replay, context_paths=context_paths)
     graph = build_graph(cfg, deps, env, replay=replay)
 
-    ctx = BaseContext(as_of=as_of, gbm=gbm, factory=factory)
-    thread_id = thread_id_for(gbm, factory, as_of)
+    ctx = BaseContext(as_of=as_of, gbm=gbm, factory=factory, query=query)
+    thread_id = thread_id_for(gbm, factory, as_of, query)
     run_config = {"configurable": {"thread_id": thread_id}}
 
     try:

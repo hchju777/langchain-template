@@ -79,6 +79,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="실행 후 체크포인트 목록 표시 (Time Travel 진입점)",
     )
+    run.add_argument(
+        "--query",
+        help="질의로 리포트 범위와 서술 초점을 좁힌다. 생략하면 전체 분석.",
+    )
+    run.add_argument(
+        "--context",
+        action="append",
+        metavar="PATH",
+        help="취합에 함께 볼 참고 문서. 여러 번 쓸 수 있다.",
+    )
 
     show = sub.add_parser("config", help="설정 진단")
     show.add_argument("action", choices=["show"])
@@ -118,12 +128,14 @@ async def _run(args) -> int:
         replay = replay_map(saved)
 
     print(f"▶ {gbm}/{factory} · as_of={as_of.isoformat(timespec='seconds')}")
+    if args.query:
+        print(f"  질의: {args.query}")
     if replay:
         print(f"  replay: {len(replay)}건의 저장된 응답을 재생합니다")
 
-    # 중복 실행 방지. 스케줄러와 같은 락을 쓰므로, 배치가 도는 중에 손으로
-    # 같은 as_of를 돌리면 여기서 막힌다.
-    lock = RunLock(thread_id_for(gbm, factory, as_of), LOCK_ROOT)
+    # 중복 실행 방지. 질의가 범위를 바꾸므로 락 키에도 넣는다 — 그래야
+    # 배치가 도는 중에도 사람이 다른 질의를 던질 수 있다.
+    lock = RunLock(thread_id_for(gbm, factory, as_of, args.query), LOCK_ROOT)
     try:
         lock.acquire()
     except LockBusyError as exc:
@@ -139,6 +151,8 @@ async def _run(args) -> int:
             env=env,
             replay=replay,
             on_node=(lambda node: print(f"  · {node}")) if args.stream else None,
+            query=args.query,
+            context_paths=args.context,
         )
     except BOOT_ERRORS as exc:
         print(f"\n✗ {exc}\n")
