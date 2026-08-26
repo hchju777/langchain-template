@@ -16,6 +16,7 @@ from src.domain.models import (
     Metric,
     OverallSummary,
     ReportSection,
+    Requirement,
     Severity,
 )
 
@@ -163,6 +164,46 @@ class BriefTemplateTest(unittest.TestCase):
         self.assertNotEqual(full, brief)
         self.assertIn("| 지표 |", full)
         self.assertNotIn("| 지표 |", brief)
+
+
+class ScopeLineTest(unittest.TestCase):
+    """선택 실행과 전체 실행을 읽는 사람이 구분할 수 있어야 한다."""
+
+    def _render(self, payload):
+        return MarkdownRenderer().render(CTX, payload)
+
+    def test_absent_for_full_scope(self):
+        out = self._render(
+            {
+                "sections": [],
+                "overall": None,
+                "requirement": Requirement(
+                    selected=["kpi.check"], is_full_scope=True
+                ),
+            }
+        )
+        self.assertNotIn("질의", out)
+
+    def test_shows_query_and_selection(self):
+        out = self._render(
+            {
+                "sections": [],
+                "overall": None,
+                "requirement": Requirement(
+                    query="재고만 보여줘",
+                    selected=["material.stock"],
+                    is_full_scope=False,
+                ),
+            }
+        )
+        self.assertIn("재고만 보여줘", out)
+        self.assertIn("material.stock", out)
+
+    def test_absent_without_requirement(self):
+        """기존 호출부가 requirement 없이 불러도 죽지 않는다."""
+        out = self._render({"sections": [], "overall": None})
+        self.assertNotIn("질의", out)
+        self.assertNotIn("${scope}", out)
 
 
 if __name__ == "__main__":

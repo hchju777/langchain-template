@@ -97,12 +97,25 @@ class MarkdownRenderer:
                 "factory": ctx.factory.upper(),
                 "as_of": ctx.as_of.isoformat(),
                 "section_count": len(sections),
+                "scope": self._render_scope(payload.get("requirement")),
                 "overall": self._render_overall(overall),
                 "sections": self._render_sections(sections),
             },
         )
         # 비어버린 블록(요약 없음, 지표 없음)이 남긴 여백을 정리한다.
         return BLANK_RUN.sub("\n\n", document).strip() + "\n"
+
+    @staticmethod
+    def _render_scope(requirement) -> str:
+        """질의로 범위를 좁힌 리포트임을 밝힌다.
+
+        전체 실행이면 아무것도 쓰지 않는다. 스케줄러 리포트의 모양이
+        바뀌지 않아야 하기 때문이다.
+        """
+        if requirement is None or requirement.is_full_scope:
+            return ""
+        picked = ", ".join(f"`{name}`" for name in requirement.selected)
+        return f"\n- 질의: {requirement.query}\n- 선택된 분석: {picked}"
 
     # ------------------------------------------------------------------
     def _render_overall(self, overall) -> str:

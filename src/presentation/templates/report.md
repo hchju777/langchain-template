@@ -14,7 +14,7 @@
      바꾸세요 (예: report_brief.md).
 
      쓸 수 있는 변수
-       document       : gbm factory as_of section_count overall sections
+       document       : gbm factory as_of section_count scope overall sections
        overall        : critical warning normal degraded narrative top_issues
        section        : key title mark severity degraded_mark
                         narrative narrative_inline metrics judgements
@@ -26,7 +26,7 @@
 # 운영 상태 리포트 — ${gbm} / ${factory}
 
 - 기준 시각: `${as_of}`
-- 분석 항목: ${section_count}건
+- 분석 항목: ${section_count}건${scope}
 ${overall}${sections}
 
 <!-- block: overall -->

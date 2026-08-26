@@ -104,7 +104,12 @@ def make_aggregate(deps: Dependencies):
 def make_render(deps: Dependencies):
     async def render(state: ReportState) -> dict:
         content = deps.renderer.render(
-            state.ctx, {"sections": state.sections, "overall": state.overall}
+            state.ctx,
+            {
+                "sections": state.sections,
+                "overall": state.overall,
+                "requirement": state.requirement,
+            },
         )
         return {"rendered": content}
 
