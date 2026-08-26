@@ -94,6 +94,8 @@ class DeliveryPort(Protocol):
     """발송 채널. 멱등키로 중복을 막는다."""
 
     channel: str
+    #: 정해진 수신자에게 밀어내는 채널인가. 질의 실행에서는 건너뛴다.
+    broadcast: bool
 
     async def deliver(self, key: str, content: str) -> str: ...
 
