@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Any, Callable
 
@@ -34,7 +35,39 @@ from src.domain.models import (
     SubgraphError,
 )
 
+logger = logging.getLogger(__name__)
+
 SLOT_ERROR_NODE = "handle_error"
+
+#: 중첩 그래프가 바깥으로 올려보내는 필드. ctx·scoped는 입력이라 제외한다.
+#: ainvoke가 전체 상태를 돌려주므로 골라내지 않으면 입력까지 다시 쓰게 된다.
+_PROCESS_OUTPUT = (
+    "records",
+    "probe_records",
+    "metrics",
+    "judgements",
+    "probe_rounds",
+    "probed",
+    "guardrail_drops",
+    # traces는 지금 어댑터를 타고 나가므로 중첩 노드가 굳이 돌려줄 일이 없다.
+    # 그래도 올린다 — 자기 어댑터를 든 중첩 노드가 생기면 여기 없다는 이유로
+    # 관측 기록만 조용히 사라지고, 그건 guardrail_drops를 올리는 이유와 같다.
+    "traces",
+)
+
+
+def _run_nested(compiled, fields: tuple[str, ...] = _PROCESS_OUTPUT) -> Callable:
+    """컴파일된 그래프를 노드로 감싼다.
+
+    fields가 이 경계에서 바깥으로 나갈 수 있는 것의 전부다. 경계마다 다르다 —
+    probe 경계는 process 경계보다 좁아야 한다(process_graph._PROBE_OUTPUT).
+    """
+
+    async def node(state: SubgraphState) -> dict:
+        result = await compiled.ainvoke(state)
+        return {k: result[k] for k in fields if k in result}
+
+    return node
 
 
 class SubgraphConfig(BaseModel):
@@ -50,6 +83,9 @@ class SubgraphConfig(BaseModel):
     enabled: bool = False
     window: timedelta | None = None
     cache_ttl: int | None = None
+    #: 추가 조회를 몇 라운드까지 허용할지. 0이면 probe가 아예 돌지 않는다.
+    #: 기본이 0이라 이 기능이 켜졌는지가 config에 드러난다.
+    max_probe_rounds: int = 0
 
 
 class SubgraphState(BaseModel):
@@ -58,6 +94,13 @@ class SubgraphState(BaseModel):
     ctx: BaseContext
     scoped: BaseContext | None = None
     records: list[Record] = Field(default_factory=list)
+    #: probe가 가져온 것. 리듀서 대신 노드가 명시적으로 누적한다 —
+    #: 중첩 그래프 경계에서 리듀서는 같은 값을 두 번 쌓는다.
+    probe_records: list[Record] = Field(default_factory=list)
+    #: 돈 라운드 수. 상한과 비교한다.
+    probe_rounds: int = 0
+    #: 이미 돌린 probe 이름. 후보 목록에서 뺀다.
+    probed: list[str] = Field(default_factory=list)
     metrics: list[Metric] = Field(default_factory=list)
     judgements: list[Judgement] = Field(default_factory=list)
     traces: list[LLMTrace] = Field(default_factory=list)
@@ -142,6 +185,14 @@ class BaseSubgraph:
             )
         return {"scoped": scoped}
 
+    def build_process(self):
+        """중첩 그래프를 쓰려면 컴파일된 그래프를 돌려준다.
+
+        None이면 process 메서드를 쓴다. 기존 서브그래프가 전부 이 경로이므로
+        이 확장으로 동작이 바뀌지 않는다.
+        """
+        return None
+
     # ------------------------------------------------------------------
     # 슬롯 2: process  (하위 클래스가 구현)
     # ------------------------------------------------------------------
@@ -169,9 +220,16 @@ class BaseSubgraph:
             judgements=state.judgements,
         )
         return {
+            # 관측 기록 둘은 같은 규칙으로 다룬다: State에 이미 쌓인 것 뒤에
+            # 어댑터가 들고 있던 것을 붙인다. 덮어쓰면 process 슬롯이 올려준
+            # 기록이 여기서 다시 사라진다.
+            "traces": state.traces + self.deps.llm.drain_traces(),
             "section": section,
-            "traces": self.deps.llm.drain_traces(),
-            "guardrail_drops": self.deps.llm.drain_guardrail_drops(),
+            # probe 실패 기록은 State에 쌓이고 가드레일 폐기는 어댑터에 쌓인다.
+            # 둘 다 올려야 어느 쪽도 조용히 사라지지 않는다.
+            "guardrail_drops": (
+                state.guardrail_drops + self.deps.llm.drain_guardrail_drops()
+            ),
         }
 
     async def _narrate(self, state: SubgraphState) -> str:
@@ -208,10 +266,19 @@ class BaseSubgraph:
         # 자기 LLM 어댑터를 가지면 여기 말고는 비울 곳이 없어, 실패 직전까지
         # 쌓인 trace와 가드레일 기록이 영영 갇힌다 — 하필 무엇이 잘못됐는지
         # 가장 알고 싶은 순간에. --replay에 필요한 것도 그 trace다.
+        # 이 노드는 guarded() 없이 등록된다. 여기서 예외가 나면 서브그래프를
+        # 탈출해 리포트 전체가 죽는다 — 한 섹션을 살리려는 경로가 전체를
+        # 죽이는 것은 본말전도다. 기록을 잃더라도 degraded 섹션은 내보낸다.
+        try:
+            traces = self.deps.llm.drain_traces()
+            drops = self.deps.llm.drain_guardrail_drops()
+        except Exception:  # noqa: BLE001 - 마지막 방어선이다
+            logger.exception("degraded 경로에서 관측 기록을 회수하지 못했습니다")
+            traces, drops = [], []
         return {
             "section": section,
-            "traces": self.deps.llm.drain_traces(),
-            "guardrail_drops": self.deps.llm.drain_guardrail_drops(),
+            "traces": state.traces + traces,
+            "guardrail_drops": state.guardrail_drops + drops,
         }
 
     # ------------------------------------------------------------------
@@ -230,9 +297,27 @@ class BaseSubgraph:
             guarded(key, SLOT_VALIDATE, "process")(self.validate_input),
             destinations=("process", SLOT_ERROR_NODE),
         )
+        # 조립 시점에 한 번만 부른다. 그래프 모양이 실행마다 바뀌면
+        # 체크포인트가 불안정해진다.
+        nested = self.build_process()
+        # config의 nodes.process override는 인스턴스의 process 속성을
+        # 갈아끼운다. build_process()가 그래프를 돌려주면 그 속성은 아무도
+        # 읽지 않으므로, config는 슬롯을 바꿨다고 믿지만 실제로는 아무 일도
+        # 일어나지 않는다. 오타 키를 extra="forbid"로 막는 것과 같은 부류의
+        # 무음 no-op이라, 조립 시점에 둘 다 이름을 대고 멈춘다.
+        if nested is not None and "process" in self.__dict__:
+            override = getattr(
+                self.__dict__["process"], "__qualname__", repr(self.__dict__["process"])
+            )
+            raise ValueError(
+                f"{key or type(self).__name__}는 build_process()로 process 슬롯을 "
+                f"채우는데 config의 nodes.process override({override})도 걸려 "
+                "있습니다. override는 무시되므로 둘 중 하나만 쓰세요."
+            )
+        process = self.process if nested is None else _run_nested(nested)
         g.add_node(
             "process",
-            guarded(key, SLOT_PROCESS, "generate_output")(self.process),
+            guarded(key, SLOT_PROCESS, "generate_output")(process),
             destinations=("generate_output", SLOT_ERROR_NODE),
         )
         g.add_node(

@@ -1,0 +1,533 @@
+"""process 슬롯 일반화.
+
+build_process()를 구현하지 않으면 기존 process 메서드를 그대로 쓴다.
+기존 6개 서브그래프가 전부 그 경로이므로, 이 변경으로 동작이 바뀌면 안 된다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import unittest
+
+from langgraph.graph import END, START, StateGraph
+
+from src.application.graph.state import Dependencies
+from src.application.subgraphs.base import (
+    BaseSubgraph,
+    SubgraphConfig,
+    SubgraphState,
+)
+from src.application.subgraphs.process_graph import Probe, ProcessGraph
+from src.domain.models import (
+    BaseContext,
+    HistoricalContext,
+    Judgement,
+    Metric,
+    ProbeDecision,
+    Record,
+    Severity,
+    SnapshotContext,
+)
+from src.infrastructure.llm import FakeLLMAdapter
+from tests.helpers import AS_OF
+
+CTX = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
+
+
+class MethodSubgraph(BaseSubgraph):
+    """build_process를 구현하지 않는 기존 방식."""
+
+    registry_name = "test.method"
+    title = "메서드 방식"
+
+    async def process(self, state: SubgraphState) -> dict:
+        return {"records": [Record(id="r1")], "metrics": [Metric(name="m", value=1)]}
+
+
+class NestedSubgraph(BaseSubgraph):
+    """build_process로 중첩 그래프를 꽂는 방식."""
+
+    registry_name = "test.nested"
+    title = "중첩 그래프 방식"
+
+    def build_process(self):
+        async def step(state: SubgraphState) -> dict:
+            return {
+                "records": [Record(id="r1")],
+                "metrics": [Metric(name="m", value=1)],
+            }
+
+        g = StateGraph(SubgraphState)
+        g.add_node("step", step)
+        g.add_edge(START, "step")
+        g.add_edge("step", END)
+        return g.compile()
+
+
+def run(subgraph_cls):
+    sub = subgraph_cls(
+        SubgraphConfig(enabled=True),
+        Dependencies(llm=FakeLLMAdapter(model="fake-local", seed="t")),
+    )
+    compiled = sub.compile()
+    return asyncio.run(compiled.ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+
+
+class ProcessSlotTest(unittest.TestCase):
+    def test_default_uses_the_process_method(self):
+        deps = Dependencies(llm=FakeLLMAdapter(model="fake-local", seed="t"))
+        self.assertIsNone(MethodSubgraph(SubgraphConfig(), deps).build_process())
+
+    def test_nested_graph_produces_the_same_shape(self):
+        """두 방식의 결과가 같아야 슬롯 교체가 안전하다."""
+        from_method = run(MethodSubgraph)
+        from_nested = run(NestedSubgraph)
+        self.assertEqual(
+            [r.id for r in from_method["records"]],
+            [r.id for r in from_nested["records"]],
+        )
+        self.assertEqual(
+            [m.name for m in from_method["metrics"]],
+            [m.name for m in from_nested["metrics"]],
+        )
+
+    def test_nested_graph_does_not_leak_input_fields(self):
+        """ainvoke는 ctx·scoped까지 돌려준다. 그것을 바깥 update로 올리면
+        나중에 리듀서가 붙는 순간 조용히 중복이 생긴다."""
+        from src.application.subgraphs.base import _PROCESS_OUTPUT
+
+        self.assertNotIn("ctx", _PROCESS_OUTPUT)
+        self.assertNotIn("scoped", _PROCESS_OUTPUT)
+
+    def test_nested_graph_traces_are_not_dropped(self):
+        """중첩 노드가 남긴 관측 기록도 올라와야 한다.
+
+        지금은 trace가 어댑터를 타고 나가므로 잠재적이다. 하지만 자기 어댑터를
+        든 중첩 노드가 생기는 순간, 경계가 좁으면 그 기록만 조용히 사라진다 —
+        guardrail_drops를 올리는 것과 같은 이유로 함께 올린다.
+        """
+        from src.domain.models import LLMTrace
+
+        class Tracing(NestedSubgraph):
+            registry_name = "test.tracing"
+
+            def build_process(self):
+                async def step(state: SubgraphState) -> dict:
+                    return {"traces": [LLMTrace(
+                        node="probe.inner", prompt="p", response="r",
+                        model="other-adapter", temperature=0.0)]}
+
+                g = StateGraph(SubgraphState)
+                g.add_node("step", step)
+                g.add_edge(START, "step")
+                g.add_edge("step", END)
+                return g.compile()
+
+        out = run(Tracing)
+        self.assertIn("probe.inner", [t.node for t in out["traces"]])
+
+    def test_probe_fields_default_empty(self):
+        state = SubgraphState(ctx=CTX)
+        self.assertEqual(state.probe_records, [])
+        self.assertEqual(state.probe_rounds, 0)
+        self.assertEqual(state.probed, [])
+
+    def test_probe_rounds_default_is_zero(self):
+        """기본이 0이라 config에서 올리지 않으면 probe가 아예 안 돈다."""
+        self.assertEqual(SubgraphConfig().max_probe_rounds, 0)
+
+
+class ProcessOverrideConflictTest(unittest.TestCase):
+    """config가 슬롯을 바꿨다고 믿는데 아무 일도 안 일어나면 안 된다.
+
+    builder는 nodes.process override를 instance.process에 setattr로 꽂는다.
+    build_process()가 그래프를 돌려주는 서브그래프에서는 그 속성이 읽히지
+    않으므로 override가 조용히 증발한다 — extra="forbid"가 막으려는 것과
+    같은 부류의 무음 no-op이다.
+    """
+
+    def deps(self):
+        return Dependencies(llm=FakeLLMAdapter(model="fake-local", seed="t"))
+
+    def test_build_process_and_an_override_together_are_rejected(self):
+        sub = NestedSubgraph(SubgraphConfig(enabled=True), self.deps())
+        donor = MethodSubgraph(SubgraphConfig(enabled=True), self.deps())
+        sub.process = donor.process
+        with self.assertRaises(ValueError) as caught:
+            sub.compile()
+        message = str(caught.exception)
+        self.assertIn("build_process", message)
+        self.assertIn("nodes.process", message)
+
+    def test_an_override_without_build_process_still_works(self):
+        """도너에 build_process가 없는 경로(material.stock_gumi)는 그대로다."""
+        sub = MethodSubgraph(SubgraphConfig(enabled=True), self.deps())
+        donor = MethodSubgraph(SubgraphConfig(enabled=True), self.deps())
+        sub.process = donor.process
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertEqual([r.id for r in out["records"]], ["r1"])
+
+    def test_build_process_alone_is_fine(self):
+        run(NestedSubgraph)  # 예외 없음
+
+
+DONE = "done"
+
+
+class DecideTest(unittest.TestCase):
+    """분기 선택도 코드가 대조한다. 잘못된 선택은 계속 파는 쪽이 아니라
+    멈추는 쪽으로 넘어져야 한다."""
+
+    def decide(self, allowed):
+        llm = FakeLLMAdapter(model="fake-local", seed="test")
+        decision = asyncio.run(llm.decide("test.node", "라운드 0 · 이미 돈 것 없음", allowed))
+        return decision, llm
+
+    def test_picks_from_the_allowed_list(self):
+        decision, _ = self.decide(["alarms", "equipment", DONE])
+        self.assertIn(decision.next_step, ["alarms", "equipment", DONE])
+
+    def test_unknown_choice_becomes_done(self):
+        class Rogue(FakeLLMAdapter):
+            async def _decide_raw(self, prompt, allowed):
+                return ProbeDecision(next_step="nonexistent.probe", reason="…")
+
+        llm = Rogue(model="fake-local")
+        decision = asyncio.run(llm.decide("test.node", "프롬프트", ["alarms", DONE]))
+        self.assertEqual(decision.next_step, DONE)
+        self.assertTrue(any("nonexistent.probe" in d for d in llm.guardrail_drops))
+
+    def test_records_a_trace(self):
+        """replay가 되려면 프롬프트와 응답이 남아야 한다."""
+        _, llm = self.decide(["alarms", DONE])
+        traces = llm.drain_traces()
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(traces[0].node, "test.node")
+
+    def test_empty_allowed_list_is_done(self):
+        decision, _ = self.decide([])
+        self.assertEqual(decision.next_step, DONE)
+
+
+class StubProbe(Probe):
+    """단일 노드 probe. 여러 노드여도 되지만 여기서는 최소로 둔다."""
+
+    def __init__(self, name, kinds, marker=None, boom=False, context_type=SnapshotContext):
+        self.name = name
+        self.kinds = kinds
+        self.description = f"{name} 확인"
+        self._marker = marker or f"{name}-rec"
+        self._boom = boom
+        self.context_type = context_type
+
+    def compile(self, deps, config):
+        async def step(state: SubgraphState) -> dict:
+            if self._boom:
+                raise RuntimeError("probe 조회 실패")
+            return {"probe_records": [*state.probe_records, Record(id=self._marker)]}
+
+        g = StateGraph(SubgraphState)
+        g.add_node("step", step)
+        g.add_edge(START, "step")
+        g.add_edge("step", END)
+        return g.compile()
+
+
+class ProbingSubgraph(BaseSubgraph):
+    registry_name = "test.probing"
+    title = "probe 있는 분석"
+    required_kinds = ("kpi", "alarms", "equipment_status")
+    probes = ()
+
+    async def fetch(self, state: SubgraphState) -> dict:
+        return {"records": [Record(id="base-1")]}
+
+    async def compute(self, state: SubgraphState) -> dict:
+        return {"metrics": [Metric(name="지표", value=len(state.records))]}
+
+    async def judge(self, state: SubgraphState) -> dict:
+        seen = state.records + state.probe_records
+        return {"judgements": [Judgement(
+            subject=f"판정 {len(seen)}건", severity=Severity.WARNING,
+            reasoning="…", evidence=[r.id for r in seen])]}
+
+    def build_process(self):
+        return ProcessGraph(self, self.probes).compile()
+
+
+def run_probing(probes, max_rounds, llm=None):
+    cls = type("Sub", (ProbingSubgraph,), {"probes": probes})
+    sub = cls(SubgraphConfig(enabled=True, max_probe_rounds=max_rounds),
+              Dependencies(llm=llm or FakeLLMAdapter(model="fake-local", seed="t")))
+    compiled = sub.compile()
+    return asyncio.run(compiled.ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+
+
+class ProcessGraphTest(unittest.TestCase):
+    def test_probe_kinds_must_be_declared(self):
+        """선언하지 않은 데이터는 열 수 없다. 조립 시점에 막는다."""
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        with self.assertRaises(ValueError) as caught:
+            ProcessGraph(sub, (StubProbe("rogue", ("material_stock",)),))
+        self.assertIn("material_stock", str(caught.exception))
+
+    def test_probe_context_must_match_the_subgraph(self):
+        """스냅샷 서브그래프에 구간 조회가 필요한 probe를 달면 조립 시점에 막힌다.
+
+        kinds만 검사하고 컨텍스트를 안 보면, alarms처럼 구간이 필요한 kind를
+        스냅샷 분석에 붙였을 때 매 실행 조용히 실패한다 — 실패 격리가 있어
+        아무도 눈치채지 못한다. 이 테스트가 그 회귀를 막는다.
+        """
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        with self.assertRaises(ValueError) as caught:
+            ProcessGraph(sub, (StubProbe(
+                "alarms", ("alarms",), context_type=HistoricalContext
+            ),))
+        self.assertIn("alarms", str(caught.exception))
+
+    def test_probe_must_declare_a_context_type(self):
+        """context_type을 안 적으면 그냥 통과시키지 않는다.
+
+        안전한 기본값이 없다 — 관대한 쪽(SnapshotContext)을 기본값으로 두면
+        빠뜨린 probe가 조용히 통과해 버려, 막으려던 무음 실패가 그대로
+        재현된다. 그래서 선언 자체를 강제한다.
+        """
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        with self.assertRaises(ValueError) as caught:
+            ProcessGraph(sub, (StubProbe(
+                "alarms", ("alarms",), context_type=None
+            ),))
+        self.assertIn("alarms", str(caught.exception))
+
+    def test_wider_context_declaration_is_accepted(self):
+        """BaseContext를 선언하면 "어떤 컨텍스트든 된다"는 뜻이라 통과해야 한다.
+
+        SnapshotContext와 HistoricalContext는 형제 관계라 어느 쪽으로
+        비교하든 서로에 대해 False가 나온다 — mismatch 테스트 하나만으로는
+        비교 방향이 뒤집혀도 잡히지 않는다. BaseContext는
+        issubclass(SnapshotContext, BaseContext)가 True, 반대는 False라
+        방향이 맞는지 이 테스트가 가른다.
+        """
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        ProcessGraph(sub, (StubProbe(
+            "alarms", ("alarms",), context_type=BaseContext
+        ),))  # 예외 없음
+
+    def test_declared_kinds_are_accepted(self):
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        ProcessGraph(sub, (StubProbe("alarms", ("alarms",)),))  # 예외 없음
+
+    def test_judgements_are_replaced_not_appended(self):
+        """라운드마다 새로 만들어 덮어쓴다. 한 섹션에 모순된 판정이 남으면 안 된다."""
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=1)
+        self.assertEqual(len(out["judgements"]), 1)
+        self.assertIn("2건", out["judgements"][0].subject)
+
+    def test_probe_records_accumulate_without_duplicates(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=2,
+        )
+        self.assertEqual([r.id for r in out["probe_records"]],
+                         ["alarms-rec", "equipment-rec"])
+
+    def test_probe_records_reach_judge(self):
+        """probe가 가져온 record가 다음 judge 라운드의 시야에 들어와야 한다.
+
+        여기 ProbingSubgraph.judge는 Judgement를 직접 만들므로 llm.judge()를
+        거치지 않는다 — 근거 가드레일은 이 테스트에 개입하지 않는다. 가드레일이
+        probe 근거를 살려두는지는 tests/test_kpi_probes.py가 확인한다.
+        """
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=1)
+        evidence = out["judgements"][0].evidence
+        self.assertIn("alarms-rec", evidence)
+
+
+class CountingLLM(FakeLLMAdapter):
+    """decide 호출 횟수를 센다. 상한 판단이 코드에 있는지 보려는 것이다."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.decide_calls = 0
+
+    async def _decide_raw(self, prompt, allowed):
+        self.decide_calls += 1
+        return await super()._decide_raw(prompt, allowed)
+
+
+class ProbeCapTest(unittest.TestCase):
+    def test_zero_rounds_never_calls_the_model(self):
+        """기본값 0이면 probe가 안 돌고 LLM도 안 부른다."""
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=0, llm=llm)
+        self.assertEqual(llm.decide_calls, 0)
+        self.assertEqual(out["probe_records"], [])
+        self.assertEqual(out["probed"], [])
+
+    def test_stops_at_the_cap_without_asking(self):
+        """상한에 닿으면 LLM을 부르지 않고 끝낸다."""
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=1,
+            llm=llm,
+        )
+        self.assertEqual(len(out["probed"]), 1)
+        # 라운드 0에서 한 번 묻고, 상한에 닿은 뒤로는 묻지 않는다.
+        self.assertEqual(llm.decide_calls, 1)
+
+    def test_exhausted_candidates_stop_without_asking(self):
+        """후보를 다 돌면 상한이 남아도 끝낸다."""
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=5, llm=llm)
+        self.assertEqual(out["probed"], ["alarms"])
+        self.assertEqual(llm.decide_calls, 1)
+
+    def test_a_probe_is_never_offered_twice(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=5,
+        )
+        self.assertEqual(sorted(out["probed"]), ["alarms", "equipment"])
+        self.assertEqual(len(out["probed"]), len(set(out["probed"])))
+
+    def test_prompt_differs_between_rounds(self):
+        """프롬프트가 같으면 replay가 같은 응답을 재생해 루프가 끝나지 않는다."""
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=2,
+        )
+        # generate_output이 이미 어댑터를 비우므로 반환된 State에서 꺼낸다.
+        # 라운드 표시가 붙은 것만 decide 호출이다 — narrate 것과 섞이지 않는다.
+        prompts = [t.prompt for t in out["traces"] if "[라운드" in t.prompt]
+        self.assertGreaterEqual(len(prompts), 2, "decide가 두 번 이상 불려야 한다")
+        self.assertEqual(len(prompts), len(set(prompts)))
+
+
+class ResettingProbe(StubProbe):
+    """자기를 묶는 카운터를 되돌리려 드는 probe.
+
+    악의를 가정한 것이 아니라, probe의 내부 그래프도 같은 SubgraphState 위에서
+    돌기 때문에 실수로 이런 값을 반환하기 쉽다는 뜻이다.
+    """
+
+    def compile(self, deps, config):
+        async def step(state: SubgraphState) -> dict:
+            return {
+                "probe_records": [*state.probe_records, Record(id=self._marker)],
+                "probe_rounds": 0,
+                "probed": [],
+            }
+
+        g = StateGraph(SubgraphState)
+        g.add_node("step", step)
+        g.add_edge(START, "step")
+        g.add_edge("step", END)
+        return g.compile()
+
+
+class ProbeBoundaryTest(unittest.TestCase):
+    """probe 경계는 process 경계보다 좁다.
+
+    probe가 올려보낼 수 있는 것에 probe_rounds·probed가 끼어 있으면, 상한을
+    강제하는 바로 그 값을 상한이 묶으려던 쪽이 덮어쓴다. 무인 야간 배치에서
+    이것은 재귀 한계까지 도는 수천 번의 LLM 호출이 된다.
+    """
+
+    def test_a_probe_cannot_reset_the_counters_that_bound_it(self):
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing(
+            (ResettingProbe("alarms", ("alarms",)),), max_rounds=1, llm=llm
+        )
+        self.assertEqual(out["probed"], ["alarms"])
+        self.assertEqual(out["probe_rounds"], 1)
+        self.assertEqual(llm.decide_calls, 1)
+
+    def test_a_probe_still_contributes_its_records(self):
+        out = run_probing(
+            (ResettingProbe("alarms", ("alarms",)),), max_rounds=1
+        )
+        self.assertEqual([r.id for r in out["probe_records"]], ["alarms-rec"])
+
+
+class ProbeFailureTest(unittest.TestCase):
+    """probe는 보강이다. 실패해도 본체 판정과 지표는 살아남아야 한다."""
+
+    def test_failure_keeps_the_base_analysis(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
+        )
+        self.assertTrue(out["judgements"], "본체 판정이 남아야 한다")
+        self.assertTrue(out["metrics"], "지표가 남아야 한다")
+        self.assertEqual([r.id for r in out["records"]], ["base-1"])
+
+    def test_failure_is_recorded(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
+        )
+        self.assertTrue(any("probe:alarms" in d for d in out["guardrail_drops"]))
+
+    def test_failure_does_not_produce_a_degraded_section(self):
+        """섹션 자체는 정상이어야 한다. degraded는 본체가 죽었을 때만이다."""
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
+        )
+        # error는 pydantic 필드가 "설정된 적 없으면" LangGraph 채널에 아예
+        # 안 실린다 — 성공 경로에서는 어떤 노드도 error를 쓰지 않으므로
+        # out에 키 자체가 없을 수 있다. 없음도 곧 "에러 없음"이라 get으로 본다.
+        self.assertIsNone(out.get("error"))
+        self.assertFalse(out["section"].degraded)
+
+    def test_failed_probe_is_not_retried(self):
+        """실패한 probe도 probed에 남아 후보에서 빠진다."""
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=5,
+        )
+        self.assertEqual(out["probed"].count("alarms"), 1)
+
+    def test_other_probes_still_run_after_a_failure(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=5,
+        )
+        self.assertIn("equipment-rec", [r.id for r in out["probe_records"]])
+
+    def test_body_failure_still_degrades_the_section(self):
+        """fetch·judge는 본체다. 그쪽 실패는 지금처럼 degraded가 되어야 한다."""
+
+        class Broken(ProbingSubgraph):
+            probes = ()
+
+            async def fetch(self, state):
+                raise RuntimeError("본체 조회 실패")
+
+        sub = Broken(SubgraphConfig(enabled=True), Dependencies(
+            llm=FakeLLMAdapter(model="fake-local", seed="t")))
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertTrue(out["section"].degraded)
+
+    def test_degradation_path_survives_a_broken_adapter(self):
+        """handle_error는 guarded() 없이 등록된다. 거기서 예외가 나면 서브그래프를
+        탈출해 리포트 전체를 죽인다 — degraded 경로가 다른 무엇에도 기대면 안 된다."""
+
+        class BrokenAdapter(FakeLLMAdapter):
+            def drain_traces(self):
+                raise RuntimeError("어댑터 고장")
+
+        class Broken(ProbingSubgraph):
+            probes = ()
+
+            async def fetch(self, state):
+                raise RuntimeError("본체 조회 실패")
+
+        sub = Broken(SubgraphConfig(enabled=True),
+                     Dependencies(llm=BrokenAdapter(model="fake-local")))
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertTrue(out["section"].degraded, "섹션은 degraded로 살아남아야 한다")

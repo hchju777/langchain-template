@@ -50,6 +50,7 @@
       "warn_gap_pct": -3.0,
       "critical_gap_pct": -8.0,
       "use_llm_judge": true,
+      "max_probe_rounds": 2,
       "llm": {
         "model": "fake-judge"
       }

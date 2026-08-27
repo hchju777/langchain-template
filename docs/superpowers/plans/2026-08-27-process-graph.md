@@ -52,6 +52,7 @@
 
 **Files:**
 - Modify: `src/application/subgraphs/base.py`
+- Modify: `src/application/nodes/outputs.py` (`no_llm`도 drops를 합친다)
 - Test: `tests/test_process_graph.py` (신규)
 
 **Interfaces:**
@@ -82,6 +83,7 @@ from src.application.subgraphs.base import (
     SubgraphState,
 )
 from src.domain.models import Metric, Record, SnapshotContext
+from src.infrastructure.llm import FakeLLMAdapter
 from tests.helpers import AS_OF
 
 CTX = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
@@ -117,15 +119,20 @@ class NestedSubgraph(BaseSubgraph):
         return g.compile()
 
 
+def deps():
+    """generate_output이 어댑터를 무조건 drain하므로 llm 없이는 못 돈다."""
+    return Dependencies(llm=FakeLLMAdapter(model="fake-local", seed="t"))
+
+
 def run(subgraph_cls):
-    sub = subgraph_cls(SubgraphConfig(enabled=True), Dependencies())
+    sub = subgraph_cls(SubgraphConfig(enabled=True), deps())
     compiled = sub.compile()
     return asyncio.run(compiled.ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
 
 
 class ProcessSlotTest(unittest.TestCase):
     def test_default_uses_the_process_method(self):
-        self.assertIsNone(MethodSubgraph(SubgraphConfig(), Dependencies()).build_process())
+        self.assertIsNone(MethodSubgraph(SubgraphConfig(), deps()).build_process())
 
     def test_nested_graph_produces_the_same_shape(self):
         """두 방식의 결과가 같아야 슬롯 교체가 안전하다."""
@@ -258,6 +265,20 @@ def _run_nested(compiled) -> Callable:
 
 `build_process()`를 안 쓰는 서브그래프는 `state.guardrail_drops`가 빈 목록이라 동작이 바뀌지 않는다.
 
+**`src/application/nodes/outputs.py`의 `no_llm`도 같이 고친다.** 이것은 config `nodes.output`으로 `generate_output`을 대체하는 슬롯 부품이고, 역시 어댑터를 drain한다. 여기를 빠뜨리면 그 슬롯을 쓰는 서브그래프에서 probe 실패 기록이 조용히 사라진다 — `tests/test_graph_behaviour.py`에 `kpi.check`를 `outputs.no_llm`으로 교체하는 테스트가 실재한다.
+
+```python
+    return {
+        "section": section,
+        "traces": self.deps.llm.drain_traces(),
+        # generate_output과 같은 이유로 둘을 합친다. 한쪽만 올리면
+        # 이 슬롯을 쓰는 서브그래프에서만 기록이 사라져 찾기 어렵다.
+        "guardrail_drops": (
+            state.guardrail_drops + self.deps.llm.drain_guardrail_drops()
+        ),
+    }
+```
+
 - [ ] **Step 6: 통과와 회귀를 확인한다**
 
 Run: `.venv/bin/python -m pytest tests/test_process_graph.py -v`
@@ -269,7 +290,7 @@ Expected: 둘 다 통과. `tests/test_graph_behaviour.py`가 손대지 않고 �
 - [ ] **Step 7: 커밋**
 
 ```bash
-git add src/application/subgraphs/base.py tests/test_process_graph.py
+git add src/application/subgraphs/base.py src/application/nodes/outputs.py tests/test_process_graph.py
 git commit -m "Let a subgraph supply a compiled graph for its process slot
 
 build_process returns None by default, so every existing subgraph keeps
@@ -425,13 +446,14 @@ class ProbeDecision(BaseModel):
 
 ```python
     async def _decide_raw(self, prompt: str, allowed: list[str]) -> ProbeDecision:
-        """첫 후보를 고르되, 아직 아무 probe도 안 돌았으면 없는 이름을 낸다.
+        """남은 후보 중 첫 번째를 고른다.
 
-        _judge_raw·_plan_raw와 같은 관례다. 가드레일이 실제로 도는지
-        LLM 없이 확인할 수 있어야 한다.
+        _judge_raw·_plan_raw는 가드레일 시연용으로 일부러 잘못된 값을 섞지만
+        **여기서는 그러지 않는다.** 잘못된 근거는 판정 하나를 버리는 데
+        그치지만 잘못된 목적지는 루프를 끝내므로, 같은 관례를 쓰면 실제
+        실행에서 probe가 매번 꺼진 것처럼 보인다. 이 가드레일은
+        test_unknown_choice_becomes_done이 명시적 하위 클래스로 검증한다.
         """
-        if "이미 돈 것 없음" in prompt:
-            return ProbeDecision(next_step="nonexistent.probe", reason="가드레일 시연")
         pick = next((a for a in allowed if a != self.DONE), self.DONE)
         return ProbeDecision(next_step=pick, reason="첫 후보를 선택했습니다")
 ```
@@ -856,14 +878,16 @@ class ProbeCapTest(unittest.TestCase):
 
     def test_prompt_differs_between_rounds(self):
         """프롬프트가 같으면 replay가 같은 응답을 재생해 루프가 끝나지 않는다."""
-        llm = FakeLLMAdapter(model="fake-local", seed="t")
-        run_probing(
+        out = run_probing(
             (StubProbe("alarms", ("alarms",)),
              StubProbe("equipment", ("equipment_status",))),
             max_rounds=2,
-            llm=llm,
         )
-        prompts = [t.prompt for t in llm.drain_traces()]
+        # generate_output이 이미 어댑터를 비우므로 반환된 State에서 꺼낸다.
+        # 여기서 llm.drain_traces()를 다시 부르면 빈 목록이 와서 이 테스트가
+        # 무엇을 하든 통과해버린다.
+        prompts = [t.prompt for t in out["traces"] if "[라운드" in t.prompt]
+        self.assertGreaterEqual(len(prompts), 2, "decide가 두 번 이상 불려야 한다")
         self.assertEqual(len(prompts), len(set(prompts)))
 ```
 
@@ -952,7 +976,10 @@ class ProbeFailureTest(unittest.TestCase):
         out = run_probing(
             (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
         )
-        self.assertIsNone(out["error"])
+        # pydantic State의 필드는 생성 시 넘기지도, 어느 노드도 쓰지도 않으면
+        # ainvoke 결과 dict에 아예 없다 — None으로 들어있는 것이 아니다.
+        # out["error"]로 쓰면 정상 경로에서 KeyError가 난다.
+        self.assertIsNone(out.get("error"))
         self.assertFalse(out["section"].degraded)
 
     def test_failed_probe_is_not_retried(self):
@@ -985,6 +1012,25 @@ class ProbeFailureTest(unittest.TestCase):
             llm=FakeLLMAdapter(model="fake-local", seed="t")))
         out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
         self.assertTrue(out["section"].degraded)
+
+    def test_degradation_path_survives_a_broken_adapter(self):
+        """handle_error는 guarded() 없이 등록된다. 거기서 예외가 나면 서브그래프를
+        탈출해 리포트 전체를 죽인다 — degraded 경로가 다른 무엇에도 기대면 안 된다."""
+
+        class BrokenAdapter(FakeLLMAdapter):
+            def drain_traces(self):
+                raise RuntimeError("어댑터 고장")
+
+        class Broken(ProbingSubgraph):
+            probes = ()
+
+            async def fetch(self, state):
+                raise RuntimeError("본체 조회 실패")
+
+        sub = Broken(SubgraphConfig(enabled=True),
+                     Dependencies(llm=BrokenAdapter(model="fake-local")))
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertTrue(out["section"].degraded, "섹션은 degraded로 살아남아야 한다")
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -1005,6 +1051,32 @@ Expected: `test_failure_keeps_the_base_analysis`가 통과하면 `probe_guarded`
 `destinations`에 `DECIDE_NODE`가 빠져 있으면 실패 경로가 열리지 않는다.
 
 `test_failure_is_recorded`가 실패하면 `guardrail_drops`가 바깥으로 올라오지 않는 것이다. Task 1의 `_PROCESS_OUTPUT`에 `"guardrail_drops"`가 있는지, `generate_output`이 `state.guardrail_drops`를 합치는지 확인한다.
+
+**`test_degradation_path_survives_a_broken_adapter`는 반드시 실패한다.** `handle_error`가 `guarded()` 없이 등록되는데(`base.py`의 `g.add_node(SLOT_ERROR_NODE, self.handle_error)`) 어댑터를 drain하므로, 거기서 예외가 나면 서브그래프를 탈출해 리포트 전체를 죽인다. 이것은 선행 프로젝트에서 park된 항목이며 실패 격리를 다루는 이 태스크가 그 자리다.
+
+`src/application/subgraphs/base.py`의 `handle_error`에서 drain을 방어한다:
+
+```python
+    async def handle_error(self, state: SubgraphState) -> dict:
+        err = state.error
+        section = ReportSection(...)  # 기존 그대로
+        # 이 노드는 guarded() 없이 등록된다. 여기서 예외가 나면 서브그래프를
+        # 탈출해 리포트 전체가 죽는다 — 한 섹션을 살리려는 경로가 전체를
+        # 죽이는 것은 본말전도다. 기록을 잃더라도 degraded 섹션은 내보낸다.
+        try:
+            traces = self.deps.llm.drain_traces()
+            drops = self.deps.llm.drain_guardrail_drops()
+        except Exception:  # noqa: BLE001 - 마지막 방어선이다
+            logger.exception("degraded 경로에서 관측 기록을 회수하지 못했습니다")
+            traces, drops = [], []
+        return {
+            "section": section,
+            "traces": traces,
+            "guardrail_drops": state.guardrail_drops + drops,
+        }
+```
+
+`logging`과 모듈 `logger`가 `base.py`에 없으면 함께 추가한다.
 
 - [ ] **Step 4: 통과를 확인한다**
 
@@ -1111,7 +1183,7 @@ def equipment_records():
 class KpiProbeTest(unittest.TestCase):
     def test_declares_the_kinds_its_probes_open(self):
         """선언하지 않은 데이터는 열 수 없다."""
-        for kind in ("kpi", "equipment_status", "alarms"):
+        for kind in ("kpi", "equipment_status", "production"):
             self.assertIn(kind, KpiCheck.required_kinds)
 
     def test_no_probe_when_rounds_are_zero(self):
@@ -1122,7 +1194,7 @@ class KpiProbeTest(unittest.TestCase):
     def test_probe_fetches_a_declared_kind(self):
         out, router = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         self.assertGreater(len(router.asked), 1)
         for kind in router.asked:
@@ -1133,7 +1205,7 @@ class KpiProbeTest(unittest.TestCase):
         without, _ = run_kpi(0, {"kpi": kpi_records()})
         with_probe, _ = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         self.assertEqual([m.name for m in without["metrics"]],
                          [m.name for m in with_probe["metrics"]])
@@ -1142,7 +1214,7 @@ class KpiProbeTest(unittest.TestCase):
         """judge가 판정을 통째로 교체해도 임계치 판정은 매번 다시 만들어진다."""
         out, _ = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         subjects = [j.subject for j in out["judgements"]]
         self.assertTrue(any("수율" in s for s in subjects), subjects)
@@ -1151,7 +1223,7 @@ class KpiProbeTest(unittest.TestCase):
         """판정의 근거가 전부 실제 record id여야 한다."""
         out, _ = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         known = {r.id for r in out["records"]} | {r.id for r in out["probe_records"]}
         for judgement in out["judgements"]:
@@ -1275,11 +1347,11 @@ class EquipmentProbe(_KindProbe):
     description = "미달 라인의 설비 가동 상태를 확인한다"
 
 
-class AlarmProbe(_KindProbe):
-    name = "alarms"
-    kind = "alarms"
-    kinds = ("alarms",)
-    description = "미달 라인에서 발생한 알람 이력을 확인한다"
+class ProductionProbe(_KindProbe):
+    name = "production"
+    kind = "production"
+    kinds = ("production",)
+    description = "미달 라인의 생산 실적을 확인한다"
 ```
 
 `KpiCheck`의 `required_kinds`를 넓히고 `build_process`를 더한다:
@@ -1287,10 +1359,10 @@ class AlarmProbe(_KindProbe):
 ```python
     # probe가 여는 것까지 선언한다. "이 분석이 건드릴 수 있는 전부"를 적는
     # 기존 규약이 그대로 이어지고, 부팅 검증이 별도 규칙 없이 적용된다.
-    required_kinds = ("kpi", "equipment_status", "alarms")
+    required_kinds = ("kpi", "equipment_status", "production")
 
     def build_process(self):
-        return ProcessGraph(self, (EquipmentProbe(), AlarmProbe())).compile()
+        return ProcessGraph(self, (EquipmentProbe(), ProductionProbe())).compile()
 ```
 
 - [ ] **Step 5: config를 켠다**
@@ -1322,15 +1394,15 @@ Expected: 둘 다 통과. `tests/test_graph_behaviour.py`와 `tests/test_boot_va
 .venv/bin/python -m src run --gbm mx --factory gumi --as-of 2026-08-13T08:00 --stream
 ```
 
-Expected: `analyze_query` 뒤에 서브그래프들이 실행되고, 리포트의 KPI 섹션이 정상 생성된다. `⚠ 가드레일:` 줄에 `kpi.check: 허용되지 않은 목적지 'nonexistent.probe'을 골라 중단합니다`가 보인다 — Fake 어댑터가 첫 라운드에 일부러 잘못된 이름을 내기 때문이며, 가드레일이 실제로 도는 증거다.
+Expected: `analyze_query` 뒤에 서브그래프들이 실행되고, 리포트의 KPI 섹션이 정상 생성된다. `⚠ 가드레일:` 줄에는 기존의 `kpi.check: 근거 [...::hallucinated]가 입력에 없어 판정을 폐기했습니다`가 그대로 보인다 — `_decide_raw`는 잘못된 목적지를 내지 않으므로 목적지 관련 경고는 나오지 않는 것이 정상이다.
 
-관찰한 라운드 수를 보고서에 적는다. **추가 조회가 실제로 몇 번 일어나는지가 B-2로 갈지를 판단하는 근거다.**
+**관찰한 것을 보고서에 적는다:** probe가 몇 라운드 돌았는지, 어느 probe가 선택됐는지, KPI 섹션의 판정 근거에 `equipment_status`나 `production`의 record id가 섞여 들어왔는지 (FakeLLMAdapter._judge_raw는 allowed_ids[:2]만 인용하므로 base KPI id만 나오는 것이 정상이며, 그 사실을 그대로 적는다). **추가 조회가 실제로 몇 번 일어나는지가 B-2로 갈지를 판단하는 근거다.**
 
 - [ ] **Step 8: 커밋**
 
 ```bash
 git add src/application/subgraphs/kpi/check.py config/gbm/mx.json tests/test_kpi_probes.py
-git commit -m "Let kpi.check look at equipment and alarms before judging
+git commit -m "Let kpi.check look at equipment and output before judging
 
 Splitting process into fetch, compute and judge lets judge re-run over
 whatever the probes have added. Metrics stay derived from the base KPI

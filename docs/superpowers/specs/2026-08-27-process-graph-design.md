@@ -157,11 +157,13 @@ class EquipmentProbe(Probe):
     description = "미달 라인의 설비 가동 상태를 확인한다"
 
 
-class AlarmProbe(Probe):
-    name = "alarms"
-    kinds = ("alarms",)
-    description = "미달 라인에서 발생한 알람 이력을 확인한다"
+class ProductionProbe(Probe):
+    name = "production"
+    kinds = ("production",)
+    description = "미달 라인의 생산 실적을 확인한다"
 ```
+
+둘 다 스냅샷 kind다. 알람 이력은 구간 데이터라 `SnapshotContext`를 쓰는 `kpi.check`에서는 열 수 없으므로 제외했다 — 6-2절의 컨텍스트 검사가 이것을 부팅에서 막는다. 구간 데이터를 보는 probe가 필요하면 그 분석의 `context_type`이 `HistoricalContext`여야 한다.
 
 probe 내부는 단일 노드여도 되고 `fetch → correlate → summarize`처럼 여러 노드여도 된다. **내부 순서는 코드가 정한다** — 순서까지 LLM이 정하는 것은 B-2다.
 
@@ -201,6 +203,17 @@ class ProcessGraph:
 ```
 
 `required_kinds`는 **base fetch와 probe가 여는 것의 합집합**이다. "이 분석이 건드릴 수 있는 전부"를 선언한다는 기존 규약이 그대로 이어지고, `validate_config`의 데이터 경로 검증이 별도 규칙 없이 적용된다.
+
+**컨텍스트도 같은 자리에서 검사한다.** probe가 요구하는 컨텍스트 종류와 서브그래프의 `context_type`은 결합돼 있다 — 구간 데이터(`alarms`)를 여는 probe를 `SnapshotContext`만 들고 있는 분석에 달면 `state.scoped`에 `start_dt`가 없어 **매 실행 실패한다.** 실패 격리가 있으니 리포트는 정상으로 보이고 아무도 눈치채지 못한다. 그래서 `Probe`가 `context_type`을 선언하고, `kinds`와 나란히 조립 시점에 대조한다.
+
+```python
+    #: 안전한 기본값이 없어 선언을 강제한다.
+    context_type: type | None = None
+```
+
+**기본값을 두지 않는 것이 핵심이다.** 처음에는 `SnapshotContext`를 기본값으로 뒀는데, 그러면 선언을 빠뜨린 probe가 **관대한 쪽으로 통과**해서 막으려던 무음 실패가 그대로 재현된다. 잊어버린 경로가 통과하는 쪽이 되면 안 된다. 선언하지 않은 probe는 조립 시점에 거부한다.
+
+이 검사가 없던 초안으로 구현했을 때 실제로 이 일이 일어났고, 기존 테스트의 순서 의존 단언이 깨지면서야 발각됐다. 기본값 문제는 그 수정을 리뷰하다 다시 발견됐다 — 같은 함정이 한 겹 아래에 또 있었던 셈이다.
 
 실행 시점에는 `decide_next`에 **아직 돌리지 않은 probe 이름만** 넘긴다. 이미 판 곳을 다시 고를 수 없다.
 

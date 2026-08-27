@@ -21,6 +21,7 @@ from src.domain.models import (
     FetchSpec,
     HistoricalContext,
     Judgement,
+    ProbeDecision,
     Record,
     ReferenceDoc,
     Requirement,
@@ -80,6 +81,10 @@ class LLMPort(Protocol):
     async def plan(
         self, node: str, prompt: str, allowed: list[str]
     ) -> Requirement: ...
+
+    async def decide(
+        self, node: str, prompt: str, allowed: list[str]
+    ) -> ProbeDecision: ...
 
 
 @runtime_checkable

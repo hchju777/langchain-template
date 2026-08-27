@@ -114,7 +114,10 @@ async def run_once(
         len(run.errors),
         len(run.delivered),
     )
-    for drop in run.guardrail_drops:
+    # judge가 라운드마다 다시 도는 만큼 같은 문구가 여러 번 쌓인다. State에는
+    # 그대로 두고(폐기 횟수도 기록이다) 로그에서만 한 번으로 줄인다.
+    # dict.fromkeys는 처음 나온 순서를 지킨다.
+    for drop in dict.fromkeys(run.guardrail_drops):
         logger.warning("가드레일: %s", drop)
     return True
 

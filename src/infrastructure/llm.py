@@ -21,7 +21,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from src.constants import QUERY_PROMPT_MARKER
-from src.domain.models import Judgement, LLMTrace, Requirement, Severity
+from src.domain.models import Judgement, LLMTrace, ProbeDecision, Requirement, Severity
 
 #: config의 llm.adapter 값
 ADAPTER_FAKE = "fake"
@@ -70,6 +70,10 @@ class BaseLLMAdapter:
 
     async def _plan_raw(self, prompt: str, allowed: list[str]) -> Requirement:
         """프롬프트 → 구조화된 실행 계획. 검증 전 raw."""
+        raise NotImplementedError
+
+    async def _decide_raw(self, prompt: str, allowed: list[str]) -> ProbeDecision:
+        """프롬프트 → 다음 목적지. 검증 전 raw."""
         raise NotImplementedError
 
     # -- 공통 경로 -----------------------------------------------------
@@ -152,6 +156,37 @@ class BaseLLMAdapter:
             self._record(node, prompt, payload)
 
         return self._enforce_selection(node, raw, set(allowed))
+
+    #: 더 볼 것이 없다는 선택. 허용목록 밖 값도 이것으로 넘어뜨린다.
+    DONE = "done"
+
+    async def decide(
+        self, node: str, prompt: str, allowed: list[str]
+    ) -> ProbeDecision:
+        """다음 목적지를 받아 허용목록과 대조한다.
+
+        judge()가 evidence를, plan()이 selected를 대조하는 것과 같은 구조다.
+        검사기가 LLM이 아니라 집합 연산이므로 검사 자체가 틀릴 수 없다.
+        """
+        if not allowed:
+            return ProbeDecision(next_step=self.DONE, reason="후보가 없습니다")
+
+        key = self._replay_key(node, prompt)
+        if key in self._replay:
+            payload = self._replay[key]
+            raw = ProbeDecision(**json.loads(payload))
+            self._record(node, prompt, payload, replayed=True)
+        else:
+            raw = await self._decide_raw(prompt, allowed)
+            payload = json.dumps(raw.model_dump(mode="json"), ensure_ascii=False)
+            self._record(node, prompt, payload)
+
+        if raw.next_step not in allowed:
+            self.guardrail_drops.append(
+                f"{node}: 허용되지 않은 목적지 {raw.next_step!r}을 골라 중단합니다"
+            )
+            return ProbeDecision(next_step=self.DONE, reason=raw.reason)
+        return raw
 
     def _enforce_selection(
         self, node: str, req: Requirement, allowed: set[str]
@@ -258,6 +293,18 @@ class FakeLLMAdapter(BaseLLMAdapter):
             rationale="질의에 언급된 분석을 선택했습니다.",
         )
 
+    async def _decide_raw(self, prompt: str, allowed: list[str]) -> ProbeDecision:
+        """남은 후보 중 첫 번째를 고른다.
+
+        _judge_raw·_plan_raw는 가드레일 시연용으로 일부러 잘못된 값을 섞지만
+        **여기서는 그러지 않는다.** 잘못된 근거는 판정 하나를 버리는 데
+        그치지만 잘못된 목적지는 루프를 끝내므로, 같은 관례를 쓰면 실제
+        실행에서 probe가 매번 꺼진 것처럼 보인다. 이 가드레일은
+        test_unknown_choice_becomes_done이 명시적 하위 클래스로 검증한다.
+        """
+        pick = next((a for a in allowed if a != self.DONE), self.DONE)
+        return ProbeDecision(next_step=pick, reason="첫 후보를 선택했습니다")
+
 
 # --------------------------------------------------------------------------
 # 실제 LLM — ★ 외부와 통신하는 유일한 지점
@@ -361,6 +408,27 @@ class ChatModelAdapter(BaseLLMAdapter):
                         "당신은 제조 운영 리포트의 범위를 정합니다. selected에는 "
                         "아래 목록에 있는 이름만 넣으세요. 목록에 없는 이름을 "
                         "만들어내면 그 선택은 폐기됩니다.\n" + listing
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
+
+    async def _decide_raw(self, prompt: str, allowed: list[str]) -> ProbeDecision:
+        """★ 실제 호출 지점 (분기 선택).
+
+        도구 호출도 루프도 없는 단발 호출이다. 목적지 하나만 고르면 된다.
+        """
+        listing = "\n".join(f"  {a}" for a in allowed)
+        structured = self._ensure_client().with_structured_output(ProbeDecision)
+        return await structured.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "다음에 무엇을 확인할지 하나만 고르세요. next_step에는 "
+                        "아래 목록에 있는 값만 넣으세요. 더 볼 것이 없으면 "
+                        f"'done'을 고르세요.\n{listing}"
                     ),
                 },
                 {"role": "user", "content": prompt},
