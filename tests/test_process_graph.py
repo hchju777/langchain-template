@@ -231,3 +231,66 @@ class ProcessGraphTest(unittest.TestCase):
         out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=1)
         evidence = out["judgements"][0].evidence
         self.assertIn("alarms-rec", evidence)
+
+
+class CountingLLM(FakeLLMAdapter):
+    """decide 호출 횟수를 센다. 상한 판단이 코드에 있는지 보려는 것이다."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.decide_calls = 0
+
+    async def _decide_raw(self, prompt, allowed):
+        self.decide_calls += 1
+        return await super()._decide_raw(prompt, allowed)
+
+
+class ProbeCapTest(unittest.TestCase):
+    def test_zero_rounds_never_calls_the_model(self):
+        """기본값 0이면 probe가 안 돌고 LLM도 안 부른다."""
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=0, llm=llm)
+        self.assertEqual(llm.decide_calls, 0)
+        self.assertEqual(out["probe_records"], [])
+        self.assertEqual(out["probed"], [])
+
+    def test_stops_at_the_cap_without_asking(self):
+        """상한에 닿으면 LLM을 부르지 않고 끝낸다."""
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=1,
+            llm=llm,
+        )
+        self.assertEqual(len(out["probed"]), 1)
+        # 라운드 0에서 한 번 묻고, 상한에 닿은 뒤로는 묻지 않는다.
+        self.assertEqual(llm.decide_calls, 1)
+
+    def test_exhausted_candidates_stop_without_asking(self):
+        """후보를 다 돌면 상한이 남아도 끝낸다."""
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=5, llm=llm)
+        self.assertEqual(out["probed"], ["alarms"])
+        self.assertEqual(llm.decide_calls, 1)
+
+    def test_a_probe_is_never_offered_twice(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=5,
+        )
+        self.assertEqual(sorted(out["probed"]), ["alarms", "equipment"])
+        self.assertEqual(len(out["probed"]), len(set(out["probed"])))
+
+    def test_prompt_differs_between_rounds(self):
+        """프롬프트가 같으면 replay가 같은 응답을 재생해 루프가 끝나지 않는다."""
+        llm = FakeLLMAdapter(model="fake-local", seed="t")
+        run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=2,
+            llm=llm,
+        )
+        prompts = [t.prompt for t in llm.drain_traces()]
+        self.assertEqual(len(prompts), len(set(prompts)))
