@@ -37,5 +37,9 @@ async def no_llm(self, state: SubgraphState) -> dict:
     return {
         "section": section,
         "traces": self.deps.llm.drain_traces(),
-        "guardrail_drops": self.deps.llm.drain_guardrail_drops(),
+        # generate_output과 같은 이유로 둘을 합친다. 한쪽만 올리면
+        # 이 슬롯을 쓰는 서브그래프에서만 기록이 사라져 찾기 어렵다.
+        "guardrail_drops": (
+            state.guardrail_drops + self.deps.llm.drain_guardrail_drops()
+        ),
     }

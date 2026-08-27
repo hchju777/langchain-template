@@ -36,6 +36,28 @@ from src.domain.models import (
 
 SLOT_ERROR_NODE = "handle_error"
 
+#: 중첩 그래프가 바깥으로 올려보내는 필드. ctx·scoped는 입력이라 제외한다.
+#: ainvoke가 전체 상태를 돌려주므로 골라내지 않으면 입력까지 다시 쓰게 된다.
+_PROCESS_OUTPUT = (
+    "records",
+    "probe_records",
+    "metrics",
+    "judgements",
+    "probe_rounds",
+    "probed",
+    "guardrail_drops",
+)
+
+
+def _run_nested(compiled) -> Callable:
+    """컴파일된 그래프를 슬롯 노드로 감싼다."""
+
+    async def node(state: SubgraphState) -> dict:
+        result = await compiled.ainvoke(state)
+        return {k: result[k] for k in _PROCESS_OUTPUT if k in result}
+
+    return node
+
 
 class SubgraphConfig(BaseModel):
     """모든 서브그래프 config의 공통 부분.
@@ -50,6 +72,9 @@ class SubgraphConfig(BaseModel):
     enabled: bool = False
     window: timedelta | None = None
     cache_ttl: int | None = None
+    #: 추가 조회를 몇 라운드까지 허용할지. 0이면 probe가 아예 돌지 않는다.
+    #: 기본이 0이라 이 기능이 켜졌는지가 config에 드러난다.
+    max_probe_rounds: int = 0
 
 
 class SubgraphState(BaseModel):
@@ -58,6 +83,13 @@ class SubgraphState(BaseModel):
     ctx: BaseContext
     scoped: BaseContext | None = None
     records: list[Record] = Field(default_factory=list)
+    #: probe가 가져온 것. 리듀서 대신 노드가 명시적으로 누적한다 —
+    #: 중첩 그래프 경계에서 리듀서는 같은 값을 두 번 쌓는다.
+    probe_records: list[Record] = Field(default_factory=list)
+    #: 돈 라운드 수. 상한과 비교한다.
+    probe_rounds: int = 0
+    #: 이미 돌린 probe 이름. 후보 목록에서 뺀다.
+    probed: list[str] = Field(default_factory=list)
     metrics: list[Metric] = Field(default_factory=list)
     judgements: list[Judgement] = Field(default_factory=list)
     traces: list[LLMTrace] = Field(default_factory=list)
@@ -142,6 +174,14 @@ class BaseSubgraph:
             )
         return {"scoped": scoped}
 
+    def build_process(self):
+        """중첩 그래프를 쓰려면 컴파일된 그래프를 돌려준다.
+
+        None이면 process 메서드를 쓴다. 기존 서브그래프가 전부 이 경로이므로
+        이 확장으로 동작이 바뀌지 않는다.
+        """
+        return None
+
     # ------------------------------------------------------------------
     # 슬롯 2: process  (하위 클래스가 구현)
     # ------------------------------------------------------------------
@@ -171,7 +211,11 @@ class BaseSubgraph:
         return {
             "section": section,
             "traces": self.deps.llm.drain_traces(),
-            "guardrail_drops": self.deps.llm.drain_guardrail_drops(),
+            # probe 실패 기록은 State에 쌓이고 가드레일 폐기는 어댑터에 쌓인다.
+            # 둘 다 올려야 어느 쪽도 조용히 사라지지 않는다.
+            "guardrail_drops": (
+                state.guardrail_drops + self.deps.llm.drain_guardrail_drops()
+            ),
         }
 
     async def _narrate(self, state: SubgraphState) -> str:
@@ -230,9 +274,13 @@ class BaseSubgraph:
             guarded(key, SLOT_VALIDATE, "process")(self.validate_input),
             destinations=("process", SLOT_ERROR_NODE),
         )
+        # 조립 시점에 한 번만 부른다. 그래프 모양이 실행마다 바뀌면
+        # 체크포인트가 불안정해진다.
+        nested = self.build_process()
+        process = self.process if nested is None else _run_nested(nested)
         g.add_node(
             "process",
-            guarded(key, SLOT_PROCESS, "generate_output")(self.process),
+            guarded(key, SLOT_PROCESS, "generate_output")(process),
             destinations=("generate_output", SLOT_ERROR_NODE),
         )
         g.add_node(
