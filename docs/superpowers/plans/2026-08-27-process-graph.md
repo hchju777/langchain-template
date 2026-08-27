@@ -83,6 +83,7 @@ from src.application.subgraphs.base import (
     SubgraphState,
 )
 from src.domain.models import Metric, Record, SnapshotContext
+from src.infrastructure.llm import FakeLLMAdapter
 from tests.helpers import AS_OF
 
 CTX = SnapshotContext(as_of=AS_OF, gbm="mx", factory="gumi")
@@ -118,15 +119,20 @@ class NestedSubgraph(BaseSubgraph):
         return g.compile()
 
 
+def deps():
+    """generate_output이 어댑터를 무조건 drain하므로 llm 없이는 못 돈다."""
+    return Dependencies(llm=FakeLLMAdapter(model="fake-local", seed="t"))
+
+
 def run(subgraph_cls):
-    sub = subgraph_cls(SubgraphConfig(enabled=True), Dependencies())
+    sub = subgraph_cls(SubgraphConfig(enabled=True), deps())
     compiled = sub.compile()
     return asyncio.run(compiled.ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
 
 
 class ProcessSlotTest(unittest.TestCase):
     def test_default_uses_the_process_method(self):
-        self.assertIsNone(MethodSubgraph(SubgraphConfig(), Dependencies()).build_process())
+        self.assertIsNone(MethodSubgraph(SubgraphConfig(), deps()).build_process())
 
     def test_nested_graph_produces_the_same_shape(self):
         """두 방식의 결과가 같아야 슬롯 교체가 안전하다."""
@@ -1001,6 +1007,25 @@ class ProbeFailureTest(unittest.TestCase):
             llm=FakeLLMAdapter(model="fake-local", seed="t")))
         out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
         self.assertTrue(out["section"].degraded)
+
+    def test_degradation_path_survives_a_broken_adapter(self):
+        """handle_error는 guarded() 없이 등록된다. 거기서 예외가 나면 서브그래프를
+        탈출해 리포트 전체를 죽인다 — degraded 경로가 다른 무엇에도 기대면 안 된다."""
+
+        class BrokenAdapter(FakeLLMAdapter):
+            def drain_traces(self):
+                raise RuntimeError("어댑터 고장")
+
+        class Broken(ProbingSubgraph):
+            probes = ()
+
+            async def fetch(self, state):
+                raise RuntimeError("본체 조회 실패")
+
+        sub = Broken(SubgraphConfig(enabled=True),
+                     Dependencies(llm=BrokenAdapter(model="fake-local")))
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertTrue(out["section"].degraded, "섹션은 degraded로 살아남아야 한다")
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -1021,6 +1046,32 @@ Expected: `test_failure_keeps_the_base_analysis`가 통과하면 `probe_guarded`
 `destinations`에 `DECIDE_NODE`가 빠져 있으면 실패 경로가 열리지 않는다.
 
 `test_failure_is_recorded`가 실패하면 `guardrail_drops`가 바깥으로 올라오지 않는 것이다. Task 1의 `_PROCESS_OUTPUT`에 `"guardrail_drops"`가 있는지, `generate_output`이 `state.guardrail_drops`를 합치는지 확인한다.
+
+**`test_degradation_path_survives_a_broken_adapter`는 반드시 실패한다.** `handle_error`가 `guarded()` 없이 등록되는데(`base.py`의 `g.add_node(SLOT_ERROR_NODE, self.handle_error)`) 어댑터를 drain하므로, 거기서 예외가 나면 서브그래프를 탈출해 리포트 전체를 죽인다. 이것은 선행 프로젝트에서 park된 항목이며 실패 격리를 다루는 이 태스크가 그 자리다.
+
+`src/application/subgraphs/base.py`의 `handle_error`에서 drain을 방어한다:
+
+```python
+    async def handle_error(self, state: SubgraphState) -> dict:
+        err = state.error
+        section = ReportSection(...)  # 기존 그대로
+        # 이 노드는 guarded() 없이 등록된다. 여기서 예외가 나면 서브그래프를
+        # 탈출해 리포트 전체가 죽는다 — 한 섹션을 살리려는 경로가 전체를
+        # 죽이는 것은 본말전도다. 기록을 잃더라도 degraded 섹션은 내보낸다.
+        try:
+            traces = self.deps.llm.drain_traces()
+            drops = self.deps.llm.drain_guardrail_drops()
+        except Exception:  # noqa: BLE001 - 마지막 방어선이다
+            logger.exception("degraded 경로에서 관측 기록을 회수하지 못했습니다")
+            traces, drops = [], []
+        return {
+            "section": section,
+            "traces": traces,
+            "guardrail_drops": state.guardrail_drops + drops,
+        }
+```
+
+`logging`과 모듈 `logger`가 `base.py`에 없으면 함께 추가한다.
 
 - [ ] **Step 4: 통과를 확인한다**
 
