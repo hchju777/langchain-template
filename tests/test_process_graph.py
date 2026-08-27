@@ -295,3 +295,82 @@ class ProbeCapTest(unittest.TestCase):
         prompts = [t.prompt for t in out["traces"] if "[라운드" in t.prompt]
         self.assertGreaterEqual(len(prompts), 2, "decide가 두 번 이상 불려야 한다")
         self.assertEqual(len(prompts), len(set(prompts)))
+
+
+class ProbeFailureTest(unittest.TestCase):
+    """probe는 보강이다. 실패해도 본체 판정과 지표는 살아남아야 한다."""
+
+    def test_failure_keeps_the_base_analysis(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
+        )
+        self.assertTrue(out["judgements"], "본체 판정이 남아야 한다")
+        self.assertTrue(out["metrics"], "지표가 남아야 한다")
+        self.assertEqual([r.id for r in out["records"]], ["base-1"])
+
+    def test_failure_is_recorded(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
+        )
+        self.assertTrue(any("probe:alarms" in d for d in out["guardrail_drops"]))
+
+    def test_failure_does_not_produce_a_degraded_section(self):
+        """섹션 자체는 정상이어야 한다. degraded는 본체가 죽었을 때만이다."""
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
+        )
+        # error는 pydantic 필드가 "설정된 적 없으면" LangGraph 채널에 아예
+        # 안 실린다 — 성공 경로에서는 어떤 노드도 error를 쓰지 않으므로
+        # out에 키 자체가 없을 수 있다. 없음도 곧 "에러 없음"이라 get으로 본다.
+        self.assertIsNone(out.get("error"))
+        self.assertFalse(out["section"].degraded)
+
+    def test_failed_probe_is_not_retried(self):
+        """실패한 probe도 probed에 남아 후보에서 빠진다."""
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=5,
+        )
+        self.assertEqual(out["probed"].count("alarms"), 1)
+
+    def test_other_probes_still_run_after_a_failure(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",), boom=True),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=5,
+        )
+        self.assertIn("equipment-rec", [r.id for r in out["probe_records"]])
+
+    def test_body_failure_still_degrades_the_section(self):
+        """fetch·judge는 본체다. 그쪽 실패는 지금처럼 degraded가 되어야 한다."""
+
+        class Broken(ProbingSubgraph):
+            probes = ()
+
+            async def fetch(self, state):
+                raise RuntimeError("본체 조회 실패")
+
+        sub = Broken(SubgraphConfig(enabled=True), Dependencies(
+            llm=FakeLLMAdapter(model="fake-local", seed="t")))
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertTrue(out["section"].degraded)
+
+    def test_degradation_path_survives_a_broken_adapter(self):
+        """handle_error는 guarded() 없이 등록된다. 거기서 예외가 나면 서브그래프를
+        탈출해 리포트 전체를 죽인다 — degraded 경로가 다른 무엇에도 기대면 안 된다."""
+
+        class BrokenAdapter(FakeLLMAdapter):
+            def drain_traces(self):
+                raise RuntimeError("어댑터 고장")
+
+        class Broken(ProbingSubgraph):
+            probes = ()
+
+            async def fetch(self, state):
+                raise RuntimeError("본체 조회 실패")
+
+        sub = Broken(SubgraphConfig(enabled=True),
+                     Dependencies(llm=BrokenAdapter(model="fake-local")))
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertTrue(out["section"].degraded, "섹션은 degraded로 살아남아야 한다")

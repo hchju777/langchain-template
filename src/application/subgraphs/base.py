@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Any, Callable
 
@@ -33,6 +34,8 @@ from src.domain.models import (
     SnapshotContext,
     SubgraphError,
 )
+
+logger = logging.getLogger(__name__)
 
 SLOT_ERROR_NODE = "handle_error"
 
@@ -252,10 +255,19 @@ class BaseSubgraph:
         # 자기 LLM 어댑터를 가지면 여기 말고는 비울 곳이 없어, 실패 직전까지
         # 쌓인 trace와 가드레일 기록이 영영 갇힌다 — 하필 무엇이 잘못됐는지
         # 가장 알고 싶은 순간에. --replay에 필요한 것도 그 trace다.
+        # 이 노드는 guarded() 없이 등록된다. 여기서 예외가 나면 서브그래프를
+        # 탈출해 리포트 전체가 죽는다 — 한 섹션을 살리려는 경로가 전체를
+        # 죽이는 것은 본말전도다. 기록을 잃더라도 degraded 섹션은 내보낸다.
+        try:
+            traces = self.deps.llm.drain_traces()
+            drops = self.deps.llm.drain_guardrail_drops()
+        except Exception:  # noqa: BLE001 - 마지막 방어선이다
+            logger.exception("degraded 경로에서 관측 기록을 회수하지 못했습니다")
+            traces, drops = [], []
         return {
             "section": section,
-            "traces": self.deps.llm.drain_traces(),
-            "guardrail_drops": self.deps.llm.drain_guardrail_drops(),
+            "traces": traces,
+            "guardrail_drops": state.guardrail_drops + drops,
         }
 
     # ------------------------------------------------------------------
