@@ -129,12 +129,46 @@ class KpiCheck(BaseSubgraph):
         seen = state.records + state.probe_records
         if cfg.use_llm_judge and seen:
             judgements.extend(await self.deps.llm.judge(
-                self.registry_name, self._judge_prompt(seen), [r.id for r in seen]))
+                self.registry_name,
+                self._judge_prompt(state.records, state.probe_records),
+                [r.id for r in seen]))
         return {"judgements": judgements}
 
-    def _judge_prompt(self, records: list) -> str:
-        facts = "\n".join(f"- [{r.id}] {r.metadata} {r.record}" for r in records)
+    @staticmethod
+    def _kpi_fact(rec: Record) -> str:
+        """KPI record 한 줄. 사람이 읽는 문장이어야 한다.
+
+        가짜 어댑터는 이 줄을 그대로 판정 근거 문장에 옮기고, 그 문장이
+        리포트에 인쇄된다. dict를 그대로 찍으면 읽는 사람에게 그 원본이
+        노출된다.
+        """
+        unit = rec.metadata.get("unit", "")
+        return (
+            f"- [{rec.id}] {rec.metadata['kpi']}: {rec.record['value']}{unit} "
+            f"(목표 대비 {rec.record['gap_pct']:+.1f}%)"
+        )
+
+    @staticmethod
+    def _probe_fact(rec: Record) -> str:
+        """probe record 한 줄.
+
+        probe마다 스키마가 달라 KPI처럼 필드 이름을 박을 수 없다. 그래도
+        dict repr을 흘리지 않도록 키와 값을 풀어 쓴다.
+        """
+        label = " ".join(str(v) for v in rec.metadata.values()) or rec.id
+        detail = ", ".join(f"{k} {v}" for k, v in rec.record.items())
+        return f"- [{rec.id}] {label}: {detail}".rstrip(": ")
+
+    def _judge_prompt(self, records: list, probe_records: list) -> str:
+        """근거 후보의 id는 전부 대괄호 안에 남는다.
+
+        가드레일이 대조하는 것은 id 집합이므로, 인용 어휘를 바꾸지 않으려면
+        표현이 바뀌어도 `[id]`는 그대로여야 한다.
+        """
+        facts = [self._kpi_fact(r) for r in records]
+        facts += [self._probe_fact(r) for r in probe_records]
         return (
             "아래 자료에서 개별 임계치로는 잡히지 않는 이상 신호가 있는지 "
-            "판단하세요. 근거는 반드시 대괄호 안의 id로만 인용하세요.\n" + facts
+            "판단하세요. 근거는 반드시 대괄호 안의 id로만 인용하세요.\n"
+            + "\n".join(facts)
         )

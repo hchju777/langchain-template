@@ -33,11 +33,15 @@ class FakeRouter:
         return set(self.by_kind)
 
 
-def run_kpi(max_rounds, by_kind):
+def run_kpi(max_rounds, by_kind, *, use_llm_judge=False, llm=None):
     router = FakeRouter(by_kind)
-    deps = Dependencies(data=router, llm=FakeLLMAdapter(model="fake-local", seed="t"))
+    deps = Dependencies(
+        data=router, llm=llm or FakeLLMAdapter(model="fake-local", seed="t")
+    )
     sub = KpiCheck(
-        KpiCheckConfig(enabled=True, use_llm_judge=False, max_probe_rounds=max_rounds),
+        KpiCheckConfig(
+            enabled=True, use_llm_judge=use_llm_judge, max_probe_rounds=max_rounds
+        ),
         deps,
     )
     out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
@@ -107,6 +111,39 @@ class KpiProbeTest(unittest.TestCase):
         for judgement in out["judgements"]:
             for ev in judgement.evidence:
                 self.assertIn(ev, known)
+
+
+class JudgePromptTest(unittest.TestCase):
+    """judge 프롬프트의 사실 목록은 리포트에 그대로 인쇄된다.
+
+    가짜 어댑터가 '- '로 시작하는 줄을 판정 근거 문장으로 옮기고, 렌더러가
+    그 문장을 찍는다. 프롬프트를 손대는 사람이 이 연결을 모르면 dict repr이
+    다시 사용자 눈앞까지 흘러간다 — 그래서 표현 자체를 여기서 고정한다.
+    """
+
+    def prompt(self):
+        sub = KpiCheck(KpiCheckConfig(enabled=True), Dependencies())
+        return sub._judge_prompt(kpi_records(), equipment_records())
+
+    def test_no_dict_repr_reaches_the_prompt(self):
+        self.assertNotIn("{'", self.prompt())
+
+    def test_kpi_fact_is_readable(self):
+        line = next(ln for ln in self.prompt().splitlines() if "kpi:수율" in ln)
+        self.assertIn("수율", line)
+        self.assertIn("88.0%", line)
+        self.assertIn("목표 대비 -8.3%", line)
+
+    def test_probe_fact_is_readable(self):
+        line = next(ln for ln in self.prompt().splitlines() if "eq:L1:EQ-3" in ln)
+        self.assertIn("EQ-3", line)
+        self.assertIn("DOWN", line)
+
+    def test_every_id_stays_in_brackets(self):
+        """가드레일의 인용 어휘는 프롬프트 표현이 바뀌어도 그대로여야 한다."""
+        prompt = self.prompt()
+        for rec in kpi_records() + equipment_records():
+            self.assertIn(f"[{rec.id}]", prompt)
 
 
 class KpiConfigTest(unittest.TestCase):
