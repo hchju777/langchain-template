@@ -17,7 +17,15 @@ from src.application.subgraphs.base import (
     SubgraphConfig,
     SubgraphState,
 )
-from src.domain.models import Metric, ProbeDecision, Record, SnapshotContext
+from src.application.subgraphs.process_graph import Probe, ProcessGraph
+from src.domain.models import (
+    Judgement,
+    Metric,
+    ProbeDecision,
+    Record,
+    Severity,
+    SnapshotContext,
+)
 from src.infrastructure.llm import FakeLLMAdapter
 from tests.helpers import AS_OF
 
@@ -136,3 +144,90 @@ class DecideTest(unittest.TestCase):
     def test_empty_allowed_list_is_done(self):
         decision, _ = self.decide([])
         self.assertEqual(decision.next_step, DONE)
+
+
+class StubProbe(Probe):
+    """단일 노드 probe. 여러 노드여도 되지만 여기서는 최소로 둔다."""
+
+    def __init__(self, name, kinds, marker=None, boom=False):
+        self.name = name
+        self.kinds = kinds
+        self.description = f"{name} 확인"
+        self._marker = marker or f"{name}-rec"
+        self._boom = boom
+
+    def compile(self, deps, config):
+        async def step(state: SubgraphState) -> dict:
+            if self._boom:
+                raise RuntimeError("probe 조회 실패")
+            return {"probe_records": [*state.probe_records, Record(id=self._marker)]}
+
+        g = StateGraph(SubgraphState)
+        g.add_node("step", step)
+        g.add_edge(START, "step")
+        g.add_edge("step", END)
+        return g.compile()
+
+
+class ProbingSubgraph(BaseSubgraph):
+    registry_name = "test.probing"
+    title = "probe 있는 분석"
+    required_kinds = ("kpi", "alarms", "equipment_status")
+    probes = ()
+
+    async def fetch(self, state: SubgraphState) -> dict:
+        return {"records": [Record(id="base-1")]}
+
+    async def compute(self, state: SubgraphState) -> dict:
+        return {"metrics": [Metric(name="지표", value=len(state.records))]}
+
+    async def judge(self, state: SubgraphState) -> dict:
+        seen = state.records + state.probe_records
+        return {"judgements": [Judgement(
+            subject=f"판정 {len(seen)}건", severity=Severity.WARNING,
+            reasoning="…", evidence=[r.id for r in seen])]}
+
+    def build_process(self):
+        return ProcessGraph(self, self.probes).compile()
+
+
+def run_probing(probes, max_rounds, llm=None):
+    cls = type("Sub", (ProbingSubgraph,), {"probes": probes})
+    sub = cls(SubgraphConfig(enabled=True, max_probe_rounds=max_rounds),
+              Dependencies(llm=llm or FakeLLMAdapter(model="fake-local", seed="t")))
+    compiled = sub.compile()
+    return asyncio.run(compiled.ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+
+
+class ProcessGraphTest(unittest.TestCase):
+    def test_probe_kinds_must_be_declared(self):
+        """선언하지 않은 데이터는 열 수 없다. 조립 시점에 막는다."""
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        with self.assertRaises(ValueError) as caught:
+            ProcessGraph(sub, (StubProbe("rogue", ("material_stock",)),))
+        self.assertIn("material_stock", str(caught.exception))
+
+    def test_declared_kinds_are_accepted(self):
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        ProcessGraph(sub, (StubProbe("alarms", ("alarms",)),))  # 예외 없음
+
+    def test_judgements_are_replaced_not_appended(self):
+        """라운드마다 새로 만들어 덮어쓴다. 한 섹션에 모순된 판정이 남으면 안 된다."""
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=1)
+        self.assertEqual(len(out["judgements"]), 1)
+        self.assertIn("2건", out["judgements"][0].subject)
+
+    def test_probe_records_accumulate_without_duplicates(self):
+        out = run_probing(
+            (StubProbe("alarms", ("alarms",)),
+             StubProbe("equipment", ("equipment_status",))),
+            max_rounds=2,
+        )
+        self.assertEqual([r.id for r in out["probe_records"]],
+                         ["alarms-rec", "equipment-rec"])
+
+    def test_probe_evidence_survives_the_guardrail(self):
+        """probe로 늘어난 record를 인용한 판정이 폐기되면 안 된다."""
+        out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=1)
+        evidence = out["judgements"][0].evidence
+        self.assertIn("alarms-rec", evidence)
