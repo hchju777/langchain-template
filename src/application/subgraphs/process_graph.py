@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 DECIDE_NODE = "decide_next"
 DONE = "done"
 
+#: probe가 바깥으로 올려보낼 수 있는 것의 전부. 설계상 probe가 가져오는 것은
+#: probe_records뿐이고, 실패 기록은 probe_guarded가 남긴다.
+#:
+#: probe_rounds와 probed가 여기 없는 것이 핵심이다. 그 둘은 decide_next가
+#: 상한을 강제하는 근거인데, probe의 내부 그래프도 같은 SubgraphState 위에서
+#: 돌기 때문에 넓은 경계를 쓰면 probe가 자기를 묶는 카운터를 덮어쓸 수 있다.
+#: 그러면 decide_next → probe → judge가 재귀 한계까지 돌고, 무인 야간 배치에서
+#: 이것은 수천 번의 LLM 호출이 된다.
+_PROBE_OUTPUT = ("probe_records", "guardrail_drops")
+
 
 class Probe:
     """추가 조회 한 갈래. 자체가 여러 노드로 된 그래프일 수 있다.
@@ -161,7 +171,7 @@ class ProcessGraph:
         names = [f"probe_{p.name}" for p in self.probes]
         g.add_node(DECIDE_NODE, self.decide_next, destinations=(*names, END))
         for probe in self.probes:
-            inner = _run_nested(probe.compile(sub.deps, sub.config))
+            inner = _run_nested(probe.compile(sub.deps, sub.config), _PROBE_OUTPUT)
             g.add_node(f"probe_{probe.name}",
                        probe_guarded(probe.name)(inner),
                        destinations=("judge", DECIDE_NODE))

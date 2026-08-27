@@ -342,6 +342,52 @@ class ProbeCapTest(unittest.TestCase):
         self.assertEqual(len(prompts), len(set(prompts)))
 
 
+class ResettingProbe(StubProbe):
+    """자기를 묶는 카운터를 되돌리려 드는 probe.
+
+    악의를 가정한 것이 아니라, probe의 내부 그래프도 같은 SubgraphState 위에서
+    돌기 때문에 실수로 이런 값을 반환하기 쉽다는 뜻이다.
+    """
+
+    def compile(self, deps, config):
+        async def step(state: SubgraphState) -> dict:
+            return {
+                "probe_records": [*state.probe_records, Record(id=self._marker)],
+                "probe_rounds": 0,
+                "probed": [],
+            }
+
+        g = StateGraph(SubgraphState)
+        g.add_node("step", step)
+        g.add_edge(START, "step")
+        g.add_edge("step", END)
+        return g.compile()
+
+
+class ProbeBoundaryTest(unittest.TestCase):
+    """probe 경계는 process 경계보다 좁다.
+
+    probe가 올려보낼 수 있는 것에 probe_rounds·probed가 끼어 있으면, 상한을
+    강제하는 바로 그 값을 상한이 묶으려던 쪽이 덮어쓴다. 무인 야간 배치에서
+    이것은 재귀 한계까지 도는 수천 번의 LLM 호출이 된다.
+    """
+
+    def test_a_probe_cannot_reset_the_counters_that_bound_it(self):
+        llm = CountingLLM(model="fake-local", seed="t")
+        out = run_probing(
+            (ResettingProbe("alarms", ("alarms",)),), max_rounds=1, llm=llm
+        )
+        self.assertEqual(out["probed"], ["alarms"])
+        self.assertEqual(out["probe_rounds"], 1)
+        self.assertEqual(llm.decide_calls, 1)
+
+    def test_a_probe_still_contributes_its_records(self):
+        out = run_probing(
+            (ResettingProbe("alarms", ("alarms",)),), max_rounds=1
+        )
+        self.assertEqual([r.id for r in out["probe_records"]], ["alarms-rec"])
+
+
 class ProbeFailureTest(unittest.TestCase):
     """probe는 보강이다. 실패해도 본체 판정과 지표는 살아남아야 한다."""
 

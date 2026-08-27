@@ -52,12 +52,16 @@ _PROCESS_OUTPUT = (
 )
 
 
-def _run_nested(compiled) -> Callable:
-    """컴파일된 그래프를 슬롯 노드로 감싼다."""
+def _run_nested(compiled, fields: tuple[str, ...] = _PROCESS_OUTPUT) -> Callable:
+    """컴파일된 그래프를 노드로 감싼다.
+
+    fields가 이 경계에서 바깥으로 나갈 수 있는 것의 전부다. 경계마다 다르다 —
+    probe 경계는 process 경계보다 좁아야 한다(process_graph._PROBE_OUTPUT).
+    """
 
     async def node(state: SubgraphState) -> dict:
         result = await compiled.ainvoke(state)
-        return {k: result[k] for k in _PROCESS_OUTPUT if k in result}
+        return {k: result[k] for k in fields if k in result}
 
     return node
 
