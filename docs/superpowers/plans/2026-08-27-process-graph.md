@@ -52,6 +52,7 @@
 
 **Files:**
 - Modify: `src/application/subgraphs/base.py`
+- Modify: `src/application/nodes/outputs.py` (`no_llm`도 drops를 합친다)
 - Test: `tests/test_process_graph.py` (신규)
 
 **Interfaces:**
@@ -258,6 +259,20 @@ def _run_nested(compiled) -> Callable:
 
 `build_process()`를 안 쓰는 서브그래프는 `state.guardrail_drops`가 빈 목록이라 동작이 바뀌지 않는다.
 
+**`src/application/nodes/outputs.py`의 `no_llm`도 같이 고친다.** 이것은 config `nodes.output`으로 `generate_output`을 대체하는 슬롯 부품이고, 역시 어댑터를 drain한다. 여기를 빠뜨리면 그 슬롯을 쓰는 서브그래프에서 probe 실패 기록이 조용히 사라진다 — `tests/test_graph_behaviour.py`에 `kpi.check`를 `outputs.no_llm`으로 교체하는 테스트가 실재한다.
+
+```python
+    return {
+        "section": section,
+        "traces": self.deps.llm.drain_traces(),
+        # generate_output과 같은 이유로 둘을 합친다. 한쪽만 올리면
+        # 이 슬롯을 쓰는 서브그래프에서만 기록이 사라져 찾기 어렵다.
+        "guardrail_drops": (
+            state.guardrail_drops + self.deps.llm.drain_guardrail_drops()
+        ),
+    }
+```
+
 - [ ] **Step 6: 통과와 회귀를 확인한다**
 
 Run: `.venv/bin/python -m pytest tests/test_process_graph.py -v`
@@ -269,7 +284,7 @@ Expected: 둘 다 통과. `tests/test_graph_behaviour.py`가 손대지 않고 �
 - [ ] **Step 7: 커밋**
 
 ```bash
-git add src/application/subgraphs/base.py tests/test_process_graph.py
+git add src/application/subgraphs/base.py src/application/nodes/outputs.py tests/test_process_graph.py
 git commit -m "Let a subgraph supply a compiled graph for its process slot
 
 build_process returns None by default, so every existing subgraph keeps
@@ -425,13 +440,14 @@ class ProbeDecision(BaseModel):
 
 ```python
     async def _decide_raw(self, prompt: str, allowed: list[str]) -> ProbeDecision:
-        """첫 후보를 고르되, 아직 아무 probe도 안 돌았으면 없는 이름을 낸다.
+        """남은 후보 중 첫 번째를 고른다.
 
-        _judge_raw·_plan_raw와 같은 관례다. 가드레일이 실제로 도는지
-        LLM 없이 확인할 수 있어야 한다.
+        _judge_raw·_plan_raw는 가드레일 시연용으로 일부러 잘못된 값을 섞지만
+        **여기서는 그러지 않는다.** 잘못된 근거는 판정 하나를 버리는 데
+        그치지만 잘못된 목적지는 루프를 끝내므로, 같은 관례를 쓰면 실제
+        실행에서 probe가 매번 꺼진 것처럼 보인다. 이 가드레일은
+        test_unknown_choice_becomes_done이 명시적 하위 클래스로 검증한다.
         """
-        if "이미 돈 것 없음" in prompt:
-            return ProbeDecision(next_step="nonexistent.probe", reason="가드레일 시연")
         pick = next((a for a in allowed if a != self.DONE), self.DONE)
         return ProbeDecision(next_step=pick, reason="첫 후보를 선택했습니다")
 ```
@@ -1322,9 +1338,9 @@ Expected: 둘 다 통과. `tests/test_graph_behaviour.py`와 `tests/test_boot_va
 .venv/bin/python -m src run --gbm mx --factory gumi --as-of 2026-08-13T08:00 --stream
 ```
 
-Expected: `analyze_query` 뒤에 서브그래프들이 실행되고, 리포트의 KPI 섹션이 정상 생성된다. `⚠ 가드레일:` 줄에 `kpi.check: 허용되지 않은 목적지 'nonexistent.probe'을 골라 중단합니다`가 보인다 — Fake 어댑터가 첫 라운드에 일부러 잘못된 이름을 내기 때문이며, 가드레일이 실제로 도는 증거다.
+Expected: `analyze_query` 뒤에 서브그래프들이 실행되고, 리포트의 KPI 섹션이 정상 생성된다. `⚠ 가드레일:` 줄에는 기존의 `kpi.check: 근거 [...::hallucinated]가 입력에 없어 판정을 폐기했습니다`가 그대로 보인다 — `_decide_raw`는 잘못된 목적지를 내지 않으므로 목적지 관련 경고는 나오지 않는 것이 정상이다.
 
-관찰한 라운드 수를 보고서에 적는다. **추가 조회가 실제로 몇 번 일어나는지가 B-2로 갈지를 판단하는 근거다.**
+**관찰한 것을 보고서에 적는다:** probe가 몇 라운드 돌았는지, 어느 probe가 선택됐는지, KPI 섹션의 판정 근거에 `equipment_status`나 `alarms`의 record id가 섞여 들어왔는지. **추가 조회가 실제로 몇 번 일어나는지가 B-2로 갈지를 판단하는 근거다.**
 
 - [ ] **Step 8: 커밋**
 
