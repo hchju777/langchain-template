@@ -1183,7 +1183,7 @@ def equipment_records():
 class KpiProbeTest(unittest.TestCase):
     def test_declares_the_kinds_its_probes_open(self):
         """선언하지 않은 데이터는 열 수 없다."""
-        for kind in ("kpi", "equipment_status", "alarms"):
+        for kind in ("kpi", "equipment_status", "production"):
             self.assertIn(kind, KpiCheck.required_kinds)
 
     def test_no_probe_when_rounds_are_zero(self):
@@ -1194,7 +1194,7 @@ class KpiProbeTest(unittest.TestCase):
     def test_probe_fetches_a_declared_kind(self):
         out, router = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         self.assertGreater(len(router.asked), 1)
         for kind in router.asked:
@@ -1205,7 +1205,7 @@ class KpiProbeTest(unittest.TestCase):
         without, _ = run_kpi(0, {"kpi": kpi_records()})
         with_probe, _ = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         self.assertEqual([m.name for m in without["metrics"]],
                          [m.name for m in with_probe["metrics"]])
@@ -1214,7 +1214,7 @@ class KpiProbeTest(unittest.TestCase):
         """judge가 판정을 통째로 교체해도 임계치 판정은 매번 다시 만들어진다."""
         out, _ = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         subjects = [j.subject for j in out["judgements"]]
         self.assertTrue(any("수율" in s for s in subjects), subjects)
@@ -1223,7 +1223,7 @@ class KpiProbeTest(unittest.TestCase):
         """판정의 근거가 전부 실제 record id여야 한다."""
         out, _ = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "alarms": []}
+                "production": []}
         )
         known = {r.id for r in out["records"]} | {r.id for r in out["probe_records"]}
         for judgement in out["judgements"]:
@@ -1347,11 +1347,11 @@ class EquipmentProbe(_KindProbe):
     description = "미달 라인의 설비 가동 상태를 확인한다"
 
 
-class AlarmProbe(_KindProbe):
-    name = "alarms"
-    kind = "alarms"
-    kinds = ("alarms",)
-    description = "미달 라인에서 발생한 알람 이력을 확인한다"
+class ProductionProbe(_KindProbe):
+    name = "production"
+    kind = "production"
+    kinds = ("production",)
+    description = "미달 라인의 생산 실적을 확인한다"
 ```
 
 `KpiCheck`의 `required_kinds`를 넓히고 `build_process`를 더한다:
@@ -1359,10 +1359,10 @@ class AlarmProbe(_KindProbe):
 ```python
     # probe가 여는 것까지 선언한다. "이 분석이 건드릴 수 있는 전부"를 적는
     # 기존 규약이 그대로 이어지고, 부팅 검증이 별도 규칙 없이 적용된다.
-    required_kinds = ("kpi", "equipment_status", "alarms")
+    required_kinds = ("kpi", "equipment_status", "production")
 
     def build_process(self):
-        return ProcessGraph(self, (EquipmentProbe(), AlarmProbe())).compile()
+        return ProcessGraph(self, (EquipmentProbe(), ProductionProbe())).compile()
 ```
 
 - [ ] **Step 5: config를 켠다**
@@ -1396,13 +1396,13 @@ Expected: 둘 다 통과. `tests/test_graph_behaviour.py`와 `tests/test_boot_va
 
 Expected: `analyze_query` 뒤에 서브그래프들이 실행되고, 리포트의 KPI 섹션이 정상 생성된다. `⚠ 가드레일:` 줄에는 기존의 `kpi.check: 근거 [...::hallucinated]가 입력에 없어 판정을 폐기했습니다`가 그대로 보인다 — `_decide_raw`는 잘못된 목적지를 내지 않으므로 목적지 관련 경고는 나오지 않는 것이 정상이다.
 
-**관찰한 것을 보고서에 적는다:** probe가 몇 라운드 돌았는지, 어느 probe가 선택됐는지, KPI 섹션의 판정 근거에 `equipment_status`나 `alarms`의 record id가 섞여 들어왔는지. **추가 조회가 실제로 몇 번 일어나는지가 B-2로 갈지를 판단하는 근거다.**
+**관찰한 것을 보고서에 적는다:** probe가 몇 라운드 돌았는지, 어느 probe가 선택됐는지, KPI 섹션의 판정 근거에 `equipment_status`나 `production`의 record id가 섞여 들어왔는지 (FakeLLMAdapter._judge_raw는 allowed_ids[:2]만 인용하므로 base KPI id만 나오는 것이 정상이며, 그 사실을 그대로 적는다). **추가 조회가 실제로 몇 번 일어나는지가 B-2로 갈지를 판단하는 근거다.**
 
 - [ ] **Step 8: 커밋**
 
 ```bash
 git add src/application/subgraphs/kpi/check.py config/gbm/mx.json tests/test_kpi_probes.py
-git commit -m "Let kpi.check look at equipment and alarms before judging
+git commit -m "Let kpi.check look at equipment and output before judging
 
 Splitting process into fetch, compute and judge lets judge re-run over
 whatever the probes have added. Metrics stay derived from the base KPI
