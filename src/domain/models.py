@@ -107,6 +107,17 @@ class Requirement(BaseModel):
     is_full_scope: bool = False
 
 
+class ProbeDecision(BaseModel):
+    """다음에 무엇을 볼지. 목적지 이름만 고른다 — 조회는 코드가 한다.
+
+    next_step이 허용목록 밖이면 어댑터가 "done"으로 바꾼다. 잘못된 선택은
+    계속 파는 쪽이 아니라 멈추는 쪽으로 넘어져야 한다.
+    """
+
+    next_step: str = "done"
+    reason: str = ""
+
+
 class ReferenceDoc(BaseModel):
     """취합 단계가 참고하는 배경 문서.
 

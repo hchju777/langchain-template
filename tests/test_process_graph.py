@@ -17,7 +17,7 @@ from src.application.subgraphs.base import (
     SubgraphConfig,
     SubgraphState,
 )
-from src.domain.models import Metric, Record, SnapshotContext
+from src.domain.models import Metric, ProbeDecision, Record, SnapshotContext
 from src.infrastructure.llm import FakeLLMAdapter
 from tests.helpers import AS_OF
 
@@ -98,3 +98,41 @@ class ProcessSlotTest(unittest.TestCase):
     def test_probe_rounds_default_is_zero(self):
         """기본이 0이라 config에서 올리지 않으면 probe가 아예 안 돈다."""
         self.assertEqual(SubgraphConfig().max_probe_rounds, 0)
+
+
+DONE = "done"
+
+
+class DecideTest(unittest.TestCase):
+    """분기 선택도 코드가 대조한다. 잘못된 선택은 계속 파는 쪽이 아니라
+    멈추는 쪽으로 넘어져야 한다."""
+
+    def decide(self, allowed):
+        llm = FakeLLMAdapter(model="fake-local", seed="test")
+        decision = asyncio.run(llm.decide("test.node", "라운드 0 · 이미 돈 것 없음", allowed))
+        return decision, llm
+
+    def test_picks_from_the_allowed_list(self):
+        decision, _ = self.decide(["alarms", "equipment", DONE])
+        self.assertIn(decision.next_step, ["alarms", "equipment", DONE])
+
+    def test_unknown_choice_becomes_done(self):
+        class Rogue(FakeLLMAdapter):
+            async def _decide_raw(self, prompt, allowed):
+                return ProbeDecision(next_step="nonexistent.probe", reason="…")
+
+        llm = Rogue(model="fake-local")
+        decision = asyncio.run(llm.decide("test.node", "프롬프트", ["alarms", DONE]))
+        self.assertEqual(decision.next_step, DONE)
+        self.assertTrue(any("nonexistent.probe" in d for d in llm.guardrail_drops))
+
+    def test_records_a_trace(self):
+        """replay가 되려면 프롬프트와 응답이 남아야 한다."""
+        _, llm = self.decide(["alarms", DONE])
+        traces = llm.drain_traces()
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(traces[0].node, "test.node")
+
+    def test_empty_allowed_list_is_done(self):
+        decision, _ = self.decide([])
+        self.assertEqual(decision.next_step, DONE)
