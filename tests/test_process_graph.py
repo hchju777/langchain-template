@@ -271,8 +271,13 @@ class ProcessGraphTest(unittest.TestCase):
         self.assertEqual([r.id for r in out["probe_records"]],
                          ["alarms-rec", "equipment-rec"])
 
-    def test_probe_evidence_survives_the_guardrail(self):
-        """probe로 늘어난 record를 인용한 판정이 폐기되면 안 된다."""
+    def test_probe_records_reach_judge(self):
+        """probe가 가져온 record가 다음 judge 라운드의 시야에 들어와야 한다.
+
+        여기 ProbingSubgraph.judge는 Judgement를 직접 만들므로 llm.judge()를
+        거치지 않는다 — 근거 가드레일은 이 테스트에 개입하지 않는다. 가드레일이
+        probe 근거를 살려두는지는 tests/test_kpi_probes.py가 확인한다.
+        """
         out = run_probing((StubProbe("alarms", ("alarms",)),), max_rounds=1)
         evidence = out["judgements"][0].evidence
         self.assertIn("alarms-rec", evidence)

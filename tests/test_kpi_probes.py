@@ -11,7 +11,7 @@ import unittest
 from src.application.graph.state import Dependencies
 from src.application.subgraphs.base import SubgraphState
 from src.application.subgraphs.kpi.check import KpiCheck, KpiCheckConfig
-from src.domain.models import SnapshotContext
+from src.domain.models import Judgement, Severity, SnapshotContext
 from src.infrastructure.llm import FakeLLMAdapter
 from tests.helpers import AS_OF, base_config, temp_config, with_subgraph_patch
 
@@ -102,15 +102,78 @@ class KpiProbeTest(unittest.TestCase):
         self.assertTrue(any("수율" in s for s in subjects), subjects)
 
     def test_all_evidence_is_traceable(self):
-        """판정의 근거가 전부 실제 record id여야 한다."""
+        """판정의 근거가 전부 실제 record id여야 한다.
+
+        LLM judge를 켜야 의미가 있다. 꺼두면 근거를 코드가 직접 넣은 판정만
+        남아 단언이 무조건 참이 된다 — 기본 어댑터는 가드레일 시연용으로
+        일부러 없는 id를 하나 섞으므로, 켜야 실제로 걸러지는지 확인된다.
+        """
         out, _ = run_kpi(
             1, {"kpi": kpi_records(), "equipment_status": equipment_records(),
-                "production": []}
+                "production": []},
+            use_llm_judge=True,
         )
         known = {r.id for r in out["records"]} | {r.id for r in out["probe_records"]}
+        self.assertTrue(out["judgements"])
         for judgement in out["judgements"]:
             for ev in judgement.evidence:
                 self.assertIn(ev, known)
+
+
+class ProbeCitingLLM(FakeLLMAdapter):
+    """probe가 가져온 record만 근거로 드는 판정을 만든다.
+
+    라운드 0에서는 그 id가 아직 없으므로 가드레일이 이 판정을 버린다.
+    probe가 돌고 난 라운드에서는 살아남아야 한다.
+    """
+
+    PROBE_ID = "eq:L1:EQ-3"
+
+    async def _judge_raw(self, prompt, allowed_ids):
+        return [
+            Judgement(
+                subject="설비 정지가 수율 미달과 겹칩니다",
+                severity=Severity.WARNING,
+                reasoning="정지 설비가 있는 라인에서 수율이 함께 떨어졌습니다",
+                evidence=[self.PROBE_ID],
+                confidence=0.8,
+            )
+        ]
+
+
+class ProbeEvidenceGuardrailTest(unittest.TestCase):
+    """이 브랜치의 핵심 주장: probe가 가져온 데이터를 인용한 판정이 근거
+    가드레일에 폐기되지 않는다.
+
+    judge가 allowed_ids로 records만 넘기면 probe 데이터를 인용한 판정이
+    통째로 사라진다. 그때는 리포트가 조용히 얌전해질 뿐이라 아무도 모른다.
+    그래서 llm.judge()를 실제로 지나는 경로로 확인한다.
+    """
+
+    def run_with_citing_judge(self):
+        return run_kpi(
+            1,
+            {"kpi": kpi_records(), "equipment_status": equipment_records(),
+             "production": []},
+            use_llm_judge=True,
+            llm=ProbeCitingLLM(model="fake-local", seed="t"),
+        )
+
+    def test_probe_evidence_survives_the_guardrail(self):
+        out, _ = self.run_with_citing_judge()
+        cited = [j for j in out["judgements"]
+                 if ProbeCitingLLM.PROBE_ID in j.evidence]
+        self.assertTrue(
+            cited, "probe가 가져온 근거를 든 판정이 남아야 한다"
+        )
+
+    def test_the_probe_record_was_actually_fetched(self):
+        """단언이 우연히 참이 되지 않도록 전제를 함께 고정한다."""
+        out, _ = self.run_with_citing_judge()
+        self.assertIn(ProbeCitingLLM.PROBE_ID,
+                      [r.id for r in out["probe_records"]])
+        self.assertNotIn(ProbeCitingLLM.PROBE_ID,
+                         [r.id for r in out["records"]])
 
 
 class JudgePromptTest(unittest.TestCase):
