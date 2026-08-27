@@ -137,6 +137,40 @@ class ProcessSlotTest(unittest.TestCase):
         self.assertEqual(SubgraphConfig().max_probe_rounds, 0)
 
 
+class ProcessOverrideConflictTest(unittest.TestCase):
+    """config가 슬롯을 바꿨다고 믿는데 아무 일도 안 일어나면 안 된다.
+
+    builder는 nodes.process override를 instance.process에 setattr로 꽂는다.
+    build_process()가 그래프를 돌려주는 서브그래프에서는 그 속성이 읽히지
+    않으므로 override가 조용히 증발한다 — extra="forbid"가 막으려는 것과
+    같은 부류의 무음 no-op이다.
+    """
+
+    def deps(self):
+        return Dependencies(llm=FakeLLMAdapter(model="fake-local", seed="t"))
+
+    def test_build_process_and_an_override_together_are_rejected(self):
+        sub = NestedSubgraph(SubgraphConfig(enabled=True), self.deps())
+        donor = MethodSubgraph(SubgraphConfig(enabled=True), self.deps())
+        sub.process = donor.process
+        with self.assertRaises(ValueError) as caught:
+            sub.compile()
+        message = str(caught.exception)
+        self.assertIn("build_process", message)
+        self.assertIn("nodes.process", message)
+
+    def test_an_override_without_build_process_still_works(self):
+        """도너에 build_process가 없는 경로(material.stock_gumi)는 그대로다."""
+        sub = MethodSubgraph(SubgraphConfig(enabled=True), self.deps())
+        donor = MethodSubgraph(SubgraphConfig(enabled=True), self.deps())
+        sub.process = donor.process
+        out = asyncio.run(sub.compile().ainvoke(SubgraphState(ctx=CTX, scoped=CTX)))
+        self.assertEqual([r.id for r in out["records"]], ["r1"])
+
+    def test_build_process_alone_is_fine(self):
+        run(NestedSubgraph)  # 예외 없음
+
+
 DONE = "done"
 
 

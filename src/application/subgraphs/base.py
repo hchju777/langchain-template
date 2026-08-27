@@ -300,6 +300,20 @@ class BaseSubgraph:
         # 조립 시점에 한 번만 부른다. 그래프 모양이 실행마다 바뀌면
         # 체크포인트가 불안정해진다.
         nested = self.build_process()
+        # config의 nodes.process override는 인스턴스의 process 속성을
+        # 갈아끼운다. build_process()가 그래프를 돌려주면 그 속성은 아무도
+        # 읽지 않으므로, config는 슬롯을 바꿨다고 믿지만 실제로는 아무 일도
+        # 일어나지 않는다. 오타 키를 extra="forbid"로 막는 것과 같은 부류의
+        # 무음 no-op이라, 조립 시점에 둘 다 이름을 대고 멈춘다.
+        if nested is not None and "process" in self.__dict__:
+            override = getattr(
+                self.__dict__["process"], "__qualname__", repr(self.__dict__["process"])
+            )
+            raise ValueError(
+                f"{key or type(self).__name__}는 build_process()로 process 슬롯을 "
+                f"채우는데 config의 nodes.process override({override})도 걸려 "
+                "있습니다. override는 무시되므로 둘 중 하나만 쓰세요."
+            )
         process = self.process if nested is None else _run_nested(nested)
         g.add_node(
             "process",
