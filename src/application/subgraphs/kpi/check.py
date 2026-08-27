@@ -34,6 +34,9 @@ class _KindProbe(Probe):
     """kind 하나를 그대로 가져오는 단일 노드 probe."""
 
     kind: str = ""
+    #: 안전한 기본값이 없어 Probe가 선언을 강제한다. 여기서 여는 kind는
+    #: 전부 스냅샷이라 SnapshotContext로 충분하다.
+    context_type = SnapshotContext
 
     def compile(self, deps, config):
         async def step(state: SubgraphState) -> dict:

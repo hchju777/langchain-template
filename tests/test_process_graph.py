@@ -19,6 +19,7 @@ from src.application.subgraphs.base import (
 )
 from src.application.subgraphs.process_graph import Probe, ProcessGraph
 from src.domain.models import (
+    BaseContext,
     HistoricalContext,
     Judgement,
     Metric,
@@ -222,6 +223,34 @@ class ProcessGraphTest(unittest.TestCase):
                 "alarms", ("alarms",), context_type=HistoricalContext
             ),))
         self.assertIn("alarms", str(caught.exception))
+
+    def test_probe_must_declare_a_context_type(self):
+        """context_type을 안 적으면 그냥 통과시키지 않는다.
+
+        안전한 기본값이 없다 — 관대한 쪽(SnapshotContext)을 기본값으로 두면
+        빠뜨린 probe가 조용히 통과해 버려, 막으려던 무음 실패가 그대로
+        재현된다. 그래서 선언 자체를 강제한다.
+        """
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        with self.assertRaises(ValueError) as caught:
+            ProcessGraph(sub, (StubProbe(
+                "alarms", ("alarms",), context_type=None
+            ),))
+        self.assertIn("alarms", str(caught.exception))
+
+    def test_wider_context_declaration_is_accepted(self):
+        """BaseContext를 선언하면 "어떤 컨텍스트든 된다"는 뜻이라 통과해야 한다.
+
+        SnapshotContext와 HistoricalContext는 형제 관계라 어느 쪽으로
+        비교하든 서로에 대해 False가 나온다 — mismatch 테스트 하나만으로는
+        비교 방향이 뒤집혀도 잡히지 않는다. BaseContext는
+        issubclass(SnapshotContext, BaseContext)가 True, 반대는 False라
+        방향이 맞는지 이 테스트가 가른다.
+        """
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        ProcessGraph(sub, (StubProbe(
+            "alarms", ("alarms",), context_type=BaseContext
+        ),))  # 예외 없음
 
     def test_declared_kinds_are_accepted(self):
         sub = ProbingSubgraph(SubgraphConfig(), Dependencies())

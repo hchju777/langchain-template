@@ -18,7 +18,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from src.application.subgraphs.base import SubgraphState, _run_nested
-from src.domain.models import SnapshotContext
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +36,9 @@ class Probe:
     kinds: tuple[str, ...] = ()
     #: decide_next 프롬프트에 실린다. 이름만으로는 무엇을 보는지 알 수 없다.
     description: str = ""
-    #: 이 probe가 요구하는 컨텍스트. 구간 데이터를 여는 probe는
-    #: HistoricalContext를 선언한다.
-    context_type: type = SnapshotContext
+    #: 이 probe가 요구하는 컨텍스트. 안전한 기본값이 없어 선언을 강제한다 —
+    #: 빠뜨린 probe가 관대한 쪽으로 통과하면 막으려던 무음 실패가 그대로다.
+    context_type: type | None = None
 
     def compile(self, deps: Any, config: Any):
         """SubgraphState 위에서 도는 컴파일된 그래프를 돌려준다.
@@ -93,6 +92,11 @@ class ProcessGraph:
         # 들고 있는데 구간을 요구하는 probe를 달면, 그 probe는 매 실행
         # 조용히 실패한다 — 실패 격리가 있으니 아무도 눈치채지 못한다.
         for probe in probes:
+            if probe.context_type is None:
+                raise ValueError(
+                    f"probe '{probe.name}'가 context_type을 선언하지 않았습니다. "
+                    "SnapshotContext 또는 HistoricalContext를 명시하세요."
+                )
             if not issubclass(subgraph.context_type, probe.context_type):
                 raise ValueError(
                     f"{subgraph.registry_name}는 {subgraph.context_type.__name__}를 "
