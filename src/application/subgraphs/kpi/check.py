@@ -38,6 +38,15 @@ class _KindProbe(Probe):
     #: 전부 스냅샷이라 SnapshotContext로 충분하다.
     context_type = SnapshotContext
 
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        """조립 검사가 보는 목록을 fetch가 쓰는 kind에서 유도한다.
+
+        둘을 손으로 따로 적으면 어긋난 채 조립을 통과하고 매 실행 터진다 —
+        context_type 검사를 넣어 막으려던 바로 그 무음 야간 실패다.
+        """
+        return (self.kind,)
+
     def compile(self, deps, config):
         async def step(state: SubgraphState) -> dict:
             records = await deps.data.fetch(state.scoped, FetchSpec(kind=self.kind))
@@ -53,14 +62,12 @@ class _KindProbe(Probe):
 class EquipmentProbe(_KindProbe):
     name = "equipment"
     kind = "equipment_status"
-    kinds = ("equipment_status",)
     description = "미달 라인의 설비 가동 상태를 확인한다"
 
 
 class ProductionProbe(_KindProbe):
     name = "production"
     kind = "production"
-    kinds = ("production",)
     description = "미달 라인의 생산 실적을 확인한다"
 
 

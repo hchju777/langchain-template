@@ -68,6 +68,16 @@ class KpiProbeTest(unittest.TestCase):
         for kind in ("kpi", "equipment_status", "production"):
             self.assertIn(kind, KpiCheck.required_kinds)
 
+    def test_probe_kinds_cannot_drift_from_the_kind_it_fetches(self):
+        """조립이 보는 kinds와 fetch가 쓰는 kind는 같은 출처여야 한다.
+
+        따로 적혀 있으면 어긋나도 조립을 통과하고, 실행에서 매번 터진다.
+        """
+        from src.application.subgraphs.kpi.check import EquipmentProbe, ProductionProbe
+
+        for probe in (EquipmentProbe(), ProductionProbe()):
+            self.assertEqual(probe.kinds, (probe.kind,))
+
     def test_no_probe_when_rounds_are_zero(self):
         out, router = run_kpi(0, {"kpi": kpi_records()})
         self.assertEqual(router.asked, ["kpi"])
