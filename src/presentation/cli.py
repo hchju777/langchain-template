@@ -173,7 +173,10 @@ async def _run(args) -> int:
         print(f"✓ 발송[{record.channel}] → {record.target}")
 
     # 서브그래프마다 다른 LLM을 쓸 수 있으므로 어댑터가 아니라 State에서 읽는다.
-    for drop in run.guardrail_drops:
+    # judge가 라운드마다 다시 도는 만큼 같은 문구가 여러 번 쌓인다. State에는
+    # 그대로 둔다 — 몇 번 폐기됐는지도 기록이다. 화면에서만 한 번으로 줄인다.
+    # dict.fromkeys는 처음 나온 순서를 지킨다.
+    for drop in dict.fromkeys(run.guardrail_drops):
         print(f"⚠ 가드레일: {drop}")
 
     for err in run.errors:

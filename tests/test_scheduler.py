@@ -179,6 +179,79 @@ class RunOnceTest(unittest.TestCase):
             self.assertTrue(self._run(cfg._root, AS_OF - timedelta(days=1)))
 
 
+class GuardrailOutputTest(unittest.TestCase):
+    """같은 가드레일 문구가 여러 줄 찍히는 것은 읽는 사람에게 소음이다.
+
+    judge가 라운드마다 다시 도니 State에는 라운드 수만큼 쌓인다. 몇 번
+    폐기됐는지도 기록이므로 State는 그대로 두고, 출력하는 자리에서만 줄인다.
+    순서는 처음 나온 대로 지킨다 — 무엇이 먼저 걸렸는지가 단서가 된다.
+    """
+
+    DROPS = ["A 폐기", "A 폐기", "B 폐기", "A 폐기"]
+
+    def _fake_run(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            thread_id="t",
+            sections=[],
+            errors=[],
+            delivered=[],
+            guardrail_drops=list(self.DROPS),
+            traces=[],
+            rendered="",
+        )
+
+    def test_스케줄러_로그는_중복을_지운다(self):
+        from unittest.mock import patch
+
+        import src.infrastructure.scheduler as sched_mod
+
+        run = self._fake_run()
+
+        async def fake_run_report(*args, **kwargs):
+            return run
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with patch.object(sched_mod, "run_report", fake_run_report):
+            with self.assertLogs(sched_mod.logger, level="WARNING") as caught:
+                asyncio.run(
+                    sched_mod.run_once(
+                        GBM, FACTORY, AS_OF, lock_root=Path(tmp.name)
+                    )
+                )
+        logged = [m.split("가드레일: ")[-1] for m in caught.output if "가드레일" in m]
+        self.assertEqual(logged, ["A 폐기", "B 폐기"])
+
+    def test_cli_출력도_중복을_지운다(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+
+        from src.presentation import cli as cli_mod
+
+        run = self._fake_run()
+
+        async def fake_run_report(*args, **kwargs):
+            return run
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = cli_mod._parser().parse_args(
+            ["run", "--gbm", GBM, "--factory", FACTORY,
+             "--as-of", AS_OF.isoformat(), "--quiet"]
+        )
+        buffer = io.StringIO()
+        with patch.object(cli_mod, "run_report", fake_run_report), \
+                patch.object(cli_mod, "LOCK_ROOT", Path(tmp.name)):
+            with redirect_stdout(buffer):
+                asyncio.run(cli_mod._run(args))
+        printed = [ln.split("가드레일: ")[-1]
+                   for ln in buffer.getvalue().splitlines() if "가드레일" in ln]
+        self.assertEqual(printed, ["A 폐기", "B 폐기"])
+
+
 class SharedUsecaseTest(unittest.TestCase):
     """CLI와 스케줄러가 같은 함수를 부르는지."""
 
