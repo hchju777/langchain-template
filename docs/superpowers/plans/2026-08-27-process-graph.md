@@ -878,14 +878,16 @@ class ProbeCapTest(unittest.TestCase):
 
     def test_prompt_differs_between_rounds(self):
         """프롬프트가 같으면 replay가 같은 응답을 재생해 루프가 끝나지 않는다."""
-        llm = FakeLLMAdapter(model="fake-local", seed="t")
-        run_probing(
+        out = run_probing(
             (StubProbe("alarms", ("alarms",)),
              StubProbe("equipment", ("equipment_status",))),
             max_rounds=2,
-            llm=llm,
         )
-        prompts = [t.prompt for t in llm.drain_traces()]
+        # generate_output이 이미 어댑터를 비우므로 반환된 State에서 꺼낸다.
+        # 여기서 llm.drain_traces()를 다시 부르면 빈 목록이 와서 이 테스트가
+        # 무엇을 하든 통과해버린다.
+        prompts = [t.prompt for t in out["traces"] if "[라운드" in t.prompt]
+        self.assertGreaterEqual(len(prompts), 2, "decide가 두 번 이상 불려야 한다")
         self.assertEqual(len(prompts), len(set(prompts)))
 ```
 
