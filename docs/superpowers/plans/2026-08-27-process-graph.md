@@ -976,7 +976,10 @@ class ProbeFailureTest(unittest.TestCase):
         out = run_probing(
             (StubProbe("alarms", ("alarms",), boom=True),), max_rounds=1
         )
-        self.assertIsNone(out["error"])
+        # pydantic State의 필드는 생성 시 넘기지도, 어느 노드도 쓰지도 않으면
+        # ainvoke 결과 dict에 아예 없다 — None으로 들어있는 것이 아니다.
+        # out["error"]로 쓰면 정상 경로에서 KeyError가 난다.
+        self.assertIsNone(out.get("error"))
         self.assertFalse(out["section"].degraded)
 
     def test_failed_probe_is_not_retried(self):
