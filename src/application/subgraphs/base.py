@@ -49,6 +49,10 @@ _PROCESS_OUTPUT = (
     "probe_rounds",
     "probed",
     "guardrail_drops",
+    # traces는 지금 어댑터를 타고 나가므로 중첩 노드가 굳이 돌려줄 일이 없다.
+    # 그래도 올린다 — 자기 어댑터를 든 중첩 노드가 생기면 여기 없다는 이유로
+    # 관측 기록만 조용히 사라지고, 그건 guardrail_drops를 올리는 이유와 같다.
+    "traces",
 )
 
 
@@ -216,8 +220,11 @@ class BaseSubgraph:
             judgements=state.judgements,
         )
         return {
+            # 관측 기록 둘은 같은 규칙으로 다룬다: State에 이미 쌓인 것 뒤에
+            # 어댑터가 들고 있던 것을 붙인다. 덮어쓰면 process 슬롯이 올려준
+            # 기록이 여기서 다시 사라진다.
+            "traces": state.traces + self.deps.llm.drain_traces(),
             "section": section,
-            "traces": self.deps.llm.drain_traces(),
             # probe 실패 기록은 State에 쌓이고 가드레일 폐기는 어댑터에 쌓인다.
             # 둘 다 올려야 어느 쪽도 조용히 사라지지 않는다.
             "guardrail_drops": (
@@ -270,7 +277,7 @@ class BaseSubgraph:
             traces, drops = [], []
         return {
             "section": section,
-            "traces": traces,
+            "traces": state.traces + traces,
             "guardrail_drops": state.guardrail_drops + drops,
         }
 

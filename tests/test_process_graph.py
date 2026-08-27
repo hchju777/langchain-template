@@ -99,6 +99,33 @@ class ProcessSlotTest(unittest.TestCase):
         self.assertNotIn("ctx", _PROCESS_OUTPUT)
         self.assertNotIn("scoped", _PROCESS_OUTPUT)
 
+    def test_nested_graph_traces_are_not_dropped(self):
+        """중첩 노드가 남긴 관측 기록도 올라와야 한다.
+
+        지금은 trace가 어댑터를 타고 나가므로 잠재적이다. 하지만 자기 어댑터를
+        든 중첩 노드가 생기는 순간, 경계가 좁으면 그 기록만 조용히 사라진다 —
+        guardrail_drops를 올리는 것과 같은 이유로 함께 올린다.
+        """
+        from src.domain.models import LLMTrace
+
+        class Tracing(NestedSubgraph):
+            registry_name = "test.tracing"
+
+            def build_process(self):
+                async def step(state: SubgraphState) -> dict:
+                    return {"traces": [LLMTrace(
+                        node="probe.inner", prompt="p", response="r",
+                        model="other-adapter", temperature=0.0)]}
+
+                g = StateGraph(SubgraphState)
+                g.add_node("step", step)
+                g.add_edge(START, "step")
+                g.add_edge("step", END)
+                return g.compile()
+
+        out = run(Tracing)
+        self.assertIn("probe.inner", [t.node for t in out["traces"]])
+
     def test_probe_fields_default_empty(self):
         state = SubgraphState(ctx=CTX)
         self.assertEqual(state.probe_records, [])
