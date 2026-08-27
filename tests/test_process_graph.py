@@ -19,6 +19,7 @@ from src.application.subgraphs.base import (
 )
 from src.application.subgraphs.process_graph import Probe, ProcessGraph
 from src.domain.models import (
+    HistoricalContext,
     Judgement,
     Metric,
     ProbeDecision,
@@ -149,12 +150,13 @@ class DecideTest(unittest.TestCase):
 class StubProbe(Probe):
     """단일 노드 probe. 여러 노드여도 되지만 여기서는 최소로 둔다."""
 
-    def __init__(self, name, kinds, marker=None, boom=False):
+    def __init__(self, name, kinds, marker=None, boom=False, context_type=SnapshotContext):
         self.name = name
         self.kinds = kinds
         self.description = f"{name} 확인"
         self._marker = marker or f"{name}-rec"
         self._boom = boom
+        self.context_type = context_type
 
     def compile(self, deps, config):
         async def step(state: SubgraphState) -> dict:
@@ -206,6 +208,20 @@ class ProcessGraphTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             ProcessGraph(sub, (StubProbe("rogue", ("material_stock",)),))
         self.assertIn("material_stock", str(caught.exception))
+
+    def test_probe_context_must_match_the_subgraph(self):
+        """스냅샷 서브그래프에 구간 조회가 필요한 probe를 달면 조립 시점에 막힌다.
+
+        kinds만 검사하고 컨텍스트를 안 보면, alarms처럼 구간이 필요한 kind를
+        스냅샷 분석에 붙였을 때 매 실행 조용히 실패한다 — 실패 격리가 있어
+        아무도 눈치채지 못한다. 이 테스트가 그 회귀를 막는다.
+        """
+        sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
+        with self.assertRaises(ValueError) as caught:
+            ProcessGraph(sub, (StubProbe(
+                "alarms", ("alarms",), context_type=HistoricalContext
+            ),))
+        self.assertIn("alarms", str(caught.exception))
 
     def test_declared_kinds_are_accepted(self):
         sub = ProbingSubgraph(SubgraphConfig(), Dependencies())
